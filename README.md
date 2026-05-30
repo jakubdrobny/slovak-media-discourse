@@ -7,6 +7,7 @@ Welcome to my analysis of [Pravda.sk](https://pravda.sk) and [Topky.sk](https://
 - `report.tex`: the full LaTeX source
 - `Slovak_News_Media_Discourse.ipybn`: the notebook with the data analysis
 - `parsing/`: scripts used to the main parts of the scraping
+- `interactive_plots/`: contains interactive verions of some of the plots from the report
 - `helpers/`: parsing testers
 - `scripts/`: pre/post-processing scripts for the data
 - `migrations/`: SQLite database up migrations
