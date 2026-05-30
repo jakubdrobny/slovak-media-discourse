@@ -1,0 +1,81 @@
+
+=== PER-DOMAIN STATISTICS ===
+
+Domain: pravda.sk
+Total articles: 29523
+Mean word count per article: 402.20
+Mean character count per article: 2705.00
+Mean sentence count per article: 26.76
+--------------------------------------------------
+Domain: topky.sk
+Total articles: 54999
+Mean word count per article: 238.41
+Mean character count per article: 1613.37
+Mean sentence count per article: 17.62
+--------------------------------------------------
+
+=== PER (DOMAIN, MACRO_CATEGORY) STATISTICS ===
+
+Domain: pravda.sk
+Macro category: hard_news
+Total articles: 13853
+Mean word count per article: 422.64
+Mean character count per article: 2899.39
+Mean sentence count per article: 26.52
+--------------------------------------------------
+Domain: pravda.sk
+Macro category: hobbies_soft
+Total articles: 7412
+Mean word count per article: 422.65
+Mean character count per article: 2840.47
+Mean sentence count per article: 27.24
+--------------------------------------------------
+Domain: pravda.sk
+Macro category: other
+Total articles: 996
+Mean word count per article: 545.05
+Mean character count per article: 3664.74
+Mean sentence count per article: 36.97
+--------------------------------------------------
+Domain: pravda.sk
+Macro category: sports
+Total articles: 5587
+Mean word count per article: 352.65
+Mean character count per article: 2251.53
+Mean sentence count per article: 28.26
+--------------------------------------------------
+Domain: pravda.sk
+Macro category: tabloid
+Total articles: 1675
+Mean word count per article: 223.07
+Mean character count per article: 1439.75
+Mean sentence count per article: 15.54
+--------------------------------------------------
+Domain: topky.sk
+Macro category: hard_news
+Total articles: 29944
+Mean word count per article: 242.65
+Mean character count per article: 1700.57
+Mean sentence count per article: 15.69
+--------------------------------------------------
+Domain: topky.sk
+Macro category: other
+Total articles: 432
+Mean word count per article: 264.42
+Mean character count per article: 1766.49
+Mean sentence count per article: 22.45
+--------------------------------------------------
+Domain: topky.sk
+Macro category: sports
+Total articles: 19176
+Mean word count per article: 240.18
+Mean character count per article: 1553.61
+Mean sentence count per article: 21.06
+--------------------------------------------------
+Domain: topky.sk
+Macro category: tabloid
+Total articles: 5447
+Mean word count per article: 206.85
+Mean character count per article: 1332.26
+Mean sentence count per article: 15.79
+--------------------------------------------------

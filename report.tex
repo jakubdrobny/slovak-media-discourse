@@ -1,0 +1,944 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage{geometry}
+\geometry{margin=1in}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{float}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{xurl}
+\usepackage{makecell}
+\usepackage{tcolorbox}
+\usepackage{array}
+\usepackage{subcaption}
+\usepackage{twemojis}
+\usepackage{wrapfig}
+
+\title{Slovak Online Media Discourse Analysis}
+\author{Jakub Drobný}
+\date{May 25, 2026}
+
+\def\topky{\href{https://topky.sk}{Topky}}
+\def\pravda{\href{https://pravda.sk}{Pravda}}
+\def\sportky{\href{https://sportky.zoznam.sk}{sportky.zoznam.sk}}
+\def\disqus{\href{https://disqus.com}{Disqus}}
+
+\begin{document}
+
+\maketitle
+
+\section{Motivation}
+One sunny day in February 2026 while reading the comments on some political articles on Topky and Pravda to amuse myself (everyone has a different taste :D) on the bus to uni, I realized that some of the comments were really funny even to the point that I thought that this can NOT be written be humans, because it was just absolute degenerate ragebait. Unfortunately, the semester was just starting and so the project was put on a shelf (along with million others :D). Luckily, when the class requirements came in I realized I could not only take up this project, but I could do it in multiple classes and analyze behaviours/patterns I did not even think about the first time I came up with the project. And so began my quest upon analyzing the Topky and Pravda commenters as to potentially uncover bots and other secrets in their comment sections.
+
+\section{Goals} \label{sec:goals}
+The goals of the projects are:
+\begin{itemize}
+	\item Analyze the sentiment of articles and their comments to evaluate their correlation both globally and by topic.
+	\item Generate article and discussion summaries to show the prevailing ideas in comment sections.
+	\item Fine-tune a pre-trained Large Language Model (LLM) to see, if we can make it generate maximally polarizing and engaging (ragebaiting) comments
+	\item Profile users through clustering algorithms to identify groups of users with similar behavior, utilizing PCA and tSNE for dimensionality reduction, temporal activity mapping and Factor Analysis to uncover latent behavioral traits.
+	\item Map the semantic landscape of the discourse using PCA, UMAP and tSNE to analyze semantics across sentiments, topics and discovered user personas.
+\end{itemize}
+
+\section{Related work}
+Instead of using general algorithms for sentiment analysis such as Bayes Classifier \cite{Pak2010}, SVM \cite{Li2013} or Deep Neural Networks \cite{Basiri2021}, we utilize the existing model SlovakBERT \cite{Pikuliak2022} which achieves state-of-the-art performance on tasks including sentiment analysis on Slovak text. We will use this model to label articles and comments. Unlike existing research \cite{Salminen2020}, which focuses on category-level toxicity, we investigate article-comment sentiment correlation globally and per category. Most importantly our analysis will be done on Slovak media news articles.
+
+User profiling and bot detection methods are essential for keeping social media discussions and communities safe and without extreme hate, racism and spread of misinformation. To achieve this, various methods have been used such as feature-based machine learning \cite{Tadesse2018}, graph-based methods \cite{Feng2023}, \cite{Tan2023}, text-based methods \cite{Heidari2020} and clustering methods \cite{Kanwal2024}, all of which managed to perform well on various bot detection benchmarks and in identifying various user personas. Our approach will use both text-based and clustering methods and we will use it to profile users in Slovak Media, which is not well researched.
+
+\section{Methodology}
+
+\subsection{Data collection}
+No dataset featuring articles and comments on \topky{} and \pravda{} exists, so we had to create our own. For articles, we stored their title, perex, content, publish datetime in the form of a Unix timestamp and category labeled by the publisher, which we will also refer to as micro category. For users, we stored just their username without any other metadata and finally for comments, we stored their content, upvote score, downvote score, publish datetime in the form of a Unix timesamp and internal id of the user, article and parent comment (if there was any). To store these tables we decided on using a single SQLite database, which was chosen due to its simplicity, ease of use and speed. The detailed schemas for all tables can be found in Table \ref{tab:db_schemas}.
+
+\begin{table}[H]
+	\centering
+	\resizebox{\textwidth}{!}{%
+		\begin{tabular}{@{}llll@{}}
+			\toprule
+			\textbf{Table}         & \textbf{Column}  & \textbf{Data Type} & \textbf{Constraints / Notes}                                                  \\ \midrule
+			\textbf{articles}      & id               & INTEGER            & PRIMARY KEY AUTOINCREMENT                                                     \\
+			                       & url              & TEXT               & UNIQUE                                                                        \\
+			                       & title            & TEXT               &                                                                               \\
+			                       & perex            & TEXT               &                                                                               \\
+			                       & content          & TEXT               &                                                                               \\
+			                       & category         & TEXT               & Original scraped micro-category                                               \\
+			                       & timestamp        & INTEGER            & Unix epoch                                                                    \\
+			                       & macro\_category  & TEXT               & DEFAULT 'other' (sports, tabloid, hard\_news, hobbies\_soft)                  \\
+			                       & sentiment        & TEXT               & 'positive', 'negative', 'neutral'                                             \\
+			                       & sentiment\_score & REAL               &                                                                               \\ \midrule
+			\textbf{users}         & id               & INTEGER            & PRIMARY KEY AUTOINCREMENT                                                     \\
+			                       & name             & TEXT               & UNIQUE                                                                        \\ \midrule
+			\textbf{comments}      & id               & INTEGER            & PRIMARY KEY AUTOINCREMENT                                                     \\
+			                       & content          & TEXT               &                                                                               \\
+			                       & timestamp        & INTEGER            & Unix epoch                                                                    \\
+			                       & upvotes          & INTEGER            & DEFAULT 0                                                                     \\
+			                       & downvotes        & INTEGER            & DEFAULT 0                                                                     \\
+			                       & userId           & INTEGER            & NOT NULL, FOREIGN KEY REFERENCES users(id)                                    \\
+			                       & articleId        & INTEGER            & NOT NULL, FOREIGN KEY REFERENCES articles(id)                                 \\
+			                       & replyToId        & INTEGER            & FOREIGN KEY REFERENCES comments(id)                                           \\
+			                       & platformId       & TEXT               & UNIQUE                                                                        \\
+			                       & platformParentId & TEXT               &                                                                               \\
+			                       & sentiment        & TEXT               & 'positive', 'negative', 'neutral'                                             \\
+			                       & sentiment\_score & REAL               &                                                                               \\ \midrule
+			\textbf{scrape\_queue} & url              & TEXT               & PRIMARY KEY                                                                   \\
+			                       & type             & TEXT               & NOT NULL, CHECK ('article\_list', 'article', 'discussion', 'user\_profile')   \\
+			                       & status           & TEXT               & NOT NULL DEFAULT 'pending', CHECK ('pending', 'processing', 'done', 'failed') \\ \bottomrule
+		\end{tabular}%
+	}
+	\caption{Final relational database schema after all migrations and feature additions.}
+	\label{tab:db_schemas}
+\end{table}
+
+First, to make the parsing process of articles and their discussions simpler, we used a \texttt{scrape\_queue} table in the database \ref{tab:db_schemas}, which stored the url that needs to be parsed as well as the type of website being parsed: archive list, article or discussion. User profiles were not parsed as they often had incomplete information and therefore mostly consisted of just a username and a list of all their comments.
+
+\subsubsection{Article parsing} \label{sec:article_parsing}
+
+To parse articles from \pravda{}, we used the \href{https://www.pravda.sk/chronologia-dna/?datum=2026-05-09}{Daily Chronology} website, which allowed for easy retrieval of all articles for a given date using a \texttt{datum=YYYY-MM-DD} query parameter. In total, we gathered 29523 articles dating from June 26, 2025 to May 9, 2026.
+
+Unlike \pravda{}, \topky{} do not have a dedicated chronology page so instead, we chose 5 major categories: \textit{Domáce, Zahraničné, Prominenti, Šport} and \textit{Ekonomika} and scraped each of their websites individually, as they contained a paginated list of all articles. In total, we gathered 54999 articles dating from May 8, 2025 to May 13, 2026. Note that the \textit{Šport} category required a distinct parser, as it is hosted on a different website \sportky{} and we treat it as a de-facto 3rd source of articles in some analyses.
+
+In tables \ref{tab:article_stats} and \ref{tab:article_cat_stats}, we can see the breakdown of the article dataset by domain, showing that the dataset is split with a \texttt{1:2} ratio between \pravda{} and \topky{} with \pravda{} generally having longer articles. The sentence:word:character ratios are roughly the same for both domains.
+
+\begin{table}[H]
+	\centering
+	\small
+	\begin{tabular}{@{}lrrrrr@{}}
+		\toprule
+		\textbf{Domain} & \makecell{\textbf{Total}                                                         \\ \textbf{Articles}} & \makecell{\textbf{Mean} \\ \textbf{Sentences}} & \makecell{\textbf{Mean} \\ \textbf{Words}} & \makecell{\textbf{Mean} \\ \textbf{Chars.}} & \makecell{\textbf{Ratio} \\ \textbf{(S : W : C)}} \\ \midrule
+		pravda.sk       & 29,523                   & 26.76 & 402.20 & 2705.00 & 1 : 15.0 : 101.1           \\
+		topky.sk        & 54,999                   & 17.62 & 238.41 & 1613.37 & 1 : 13.5 : \phantom{0}91.6 \\ \bottomrule
+	\end{tabular}
+	\caption{Overall article text statistics per domain. Mean sentences, words, and characters represent the average counts calculated from the main body text of the scraped articles. S:W:C is a ratio of 1 sentence per X words per Y characters highlighting syntax patterns.}
+	\label{tab:article_stats}
+\end{table}
+
+Since the total number of micro categories scraped from the websites totalled to 121 and 174 for \pravda{} and \topky{} respectively, we created 5 major macro categories: \textit{hard\_news, hobbies\_soft, sport, tabloid} and \textit{other} into which we split all the articles based on their micro category using an automated script. Hard news includes political and economic articles. Hobbies soft include non-sport hobbies such as fashion, health and tech. Full list of grouping logic can be found in Table \ref{tab:macro_cat_split}. Notice that the tabloid articles are shorter than average in both domains, which is usually due to tabloid articles only having a clickbaity title to engage the user to click on the website, but their content is a short uninteresting text. Interestingly, hard news articles are also shorter than average on \topky{}. Furthermore, the sports articles seem to utilize shortest sentences and words among the groups, which might be due to usage of abbreviations of team names or due to results of matches/competitions being presented using numbers.
+
+\begin{table}[H]
+	\centering
+	\small
+	\begin{tabular}{@{}llrrrrr@{}}
+		\toprule
+		\textbf{Domain} & \makecell{\textbf{Macro}                                                                  \\ \textbf{Category}} & \makecell{\textbf{Total} \\ \textbf{Articles}} & \makecell{\textbf{Mean} \\ \textbf{Sentences}} & \makecell{\textbf{Mean} \\ \textbf{Words}} & \makecell{\textbf{Mean} \\ \textbf{Chars.}} & \makecell{\textbf{Ratio} \\ \textbf{(S : W : C)}} \\ \midrule
+		pravda.sk
+		                & hard\_news               & 13,853 & 26.52 & 422.64 & 2899.39 & 1 : 15.9 : 109.3           \\
+		                & hobbies\_soft            & 7,412  & 27.24 & 422.65 & 2840.47 & 1 : 15.5 : 104.3           \\
+		                & sports                   & 5,587  & 28.26 & 352.65 & 2251.53 & 1 : 12.5 : \phantom{0}79.7 \\
+		                & tabloid                  & 1,675  & 15.54 & 223.07 & 1439.75 & 1 : 14.4 : \phantom{0}92.6 \\
+		                & other                    & 996    & 36.97 & 545.05 & 3664.74 & 1 : 14.7 : \phantom{0}99.1 \\ \midrule
+		topky.sk
+		                & hard\_news               & 29,944 & 15.69 & 242.65 & 1700.57 & 1 : 15.5 : 108.4           \\
+		                & sports                   & 19,176 & 21.06 & 240.18 & 1553.61 & 1 : 11.4 : \phantom{0}73.8 \\
+		                & tabloid                  & 5,447  & 15.79 & 206.85 & 1332.26 & 1 : 13.1 : \phantom{0}84.4 \\
+		                & other                    & 432    & 22.45 & 264.42 & 1766.49 & 1 : 11.8 : \phantom{0}78.7 \\ \bottomrule
+	\end{tabular}
+	\caption{Article statistics broken down by domain and macro category. Mean sentences, words, and characters represent the average counts calculated from the main body text of the scraped articles. S:W:C is a ratio of 1 sentence per X words per Y characters highlighting syntax patterns.}
+	\label{tab:article_cat_stats}
+\end{table}
+
+\begin{table}[H]
+	\centering
+	\small
+	\begin{tabular}{@{}lp{11.5cm}@{}}
+		\toprule
+		\textbf{Macro Category} & \textbf{Keywords (Substring Matches)}                                                                                                                                                                                                                                                                                                                   \\ \midrule
+		\textbf{sports}         & sport, futbal, hokej, tenis, cyklistika, atletika, zoh, ms , ms-, nhl, nba, liga, wimbledon, lyzovani, biatlon, basketbal, box, florbal, futsal, gymnastika, hadzana, olympij, volejbal, motorizmus, formula, motogp, rely, ofsajd, prenos, sampion, me v                                                                                               \\ \midrule
+		\textbf{tabloid}        & prominenti, kauzy, reality, influencer, soubiznis, koberc, modelk, muz-dna, modn, sex                                                                                                                                                                                                                                                                   \\ \midrule
+		\textbf{hobbies\_soft}  & krasa, moda, zena, zdravie, zahrada, magazin, ludia, jedlo, cestov, koktail, hudba, film, televizia, kultura, kniha, divadlo, umenie, festival, obrazovk, more, hory, exotika, krajina, byvanie, dom-a-byt, balkon, relax, vyziva, dusa, zivot, poradna, potraviny, auto, tech, veda, ekologia, startupy, spotrebitel, doprav, vesmir, zem, ako-vybavit \\ \midrule
+		\textbf{hard\_news}     & domac, svet, zahranicn, regiony, politik, komentar, glos, esej, spolocnost, konflikt, spravy, analyz, postreh, dnes-pise, rozhovor, reportaz, instituci, mesta, charita, csr, novinky, ekonomika, hypoteky, peniaz, energeti, priemysel, firmy, trhy, obchod, podnikan, zivnost, inovaci, kariera, praca, vzdelavanie, dochod, senior                   \\ \midrule
+		\textbf{other}          & \textit{Default assignment if no preceding keywords match the category string.}                                                                                                                                                                                                                                                                         \\ \bottomrule
+	\end{tabular}
+	\caption{Heuristic logic used to categorize raw scraped micro categories into macro categories. The target string was lowercased, and substring matches were evaluated sequentially from top to bottom.}
+	\label{tab:macro_cat_split}
+\end{table}
+
+\subsubsection{Parsing comments}
+Parsing article discussions posed a problem caused by their hierarchical structure, as we also want to save the id of the parent comment in the \texttt{replyToId} column, which we do not have when saving all comments of a single discussion to the database at once. The simplest workaround was to also scrape the \texttt{platformId} of the comment, which is embedded into each comment's HTML tag and at first only save \texttt{platformId} and \texttt{platformParentId} which we can easily compute during the recursive scraping. After scraping all discussions, the \texttt{replyToId} column was filled with a simple SQL script based on the \texttt{parentPlatformId} column. Parsing \topky{} discussions required first parsing the initial page of the comments and then getting the rest of the comments from the \disqus{} API, since further comments are injected with Javascript after clicking the Load more comments... button. Luckily, the API was easily accessible after finding an API key while inspecting the requests made by the website in the browsers network tab and the key appeared to not have a rate limit. Note that \disqus{} is a third-party commenting platform used by \topky{} and many other Slovak media websites. \pravda{} uses their own in-house solution \href{https://debata.pravda.sk}{debata.pravda.sk}.
+
+In Table \ref{tab:comment_stats} we can see that we collected almost 4x more comments from \topky{} than from \pravda{}, while online collecting roughly 2x more articles, which shows that \topky{} are engaging the readers almost twice as much. This might be explained by the fact that \pravda{} uses their own in-house solution for discussion which might make users hesitant to create yet another account to comment, whereas \topky{} use \disqus{}, which is used by many popular Slovak media websites and therefore requires only one account creation to comment on various websites. This is also supported by the mean number of comments per article, which is almost 2x higher for \topky{} then for \pravda{}, but on the other hand, the comments on \pravda{} have a 3x higher net score (upvotes minues downvotes). Note that \pravda{} does not store both upvotes and downvotes, only their delta, which we store in the \texttt{upvotes} column of our database.
+
+\begin{table}[H]
+	\centering
+	\small
+	\begin{tabular}{@{}lrrrrrr@{}}
+		\toprule
+		\textbf{Domain} & \makecell{\textbf{Total}                                          \\ \textbf{Comments}} & \makecell{\textbf{Per Art.}} & \makecell{\textbf{Mean} \\ \textbf{Chars.}} & \makecell{\textbf{Reply} \\ \textbf{Ratio}} & \makecell{\textbf{Mean} \\ \textbf{Upvotes}} & \makecell{\textbf{Mean} \\ \textbf{Downvotes}} \\ \midrule
+		pravda.sk       & 595,090                  & 20.16 & 115.13 & 58.81\% & 2.25 & 0.00 \\
+		topky.sk        & 2,154,493                & 39.17 & 102.95 & 56.06\% & 1.38 & 0.53 \\ \bottomrule
+	\end{tabular}
+	\caption{Overall comment statistics per domain. Third column shows mean comment count per article. Fourth column shows mean leangth of comment in characters. Fifth column shows ratio of comments replying to some other comment to total comments. Sixth column for \pravda{} shows net score (upvotes minus downvotes), since they do not show both values separately.}
+	\label{tab:comment_stats}
+\end{table}
+
+Furher, in Table \ref{tab:comment_cat_stats}, we can see a similar breakdown per macro category. Hard news is clearly the main driving force of the engagement on Slovak media websites having the most total comments, most comments per articles and highest reply ratio, showing that people are discussing with each other more than about other topics.  Hard news comments also have the highest voting net score on \pravda{} and high downvote average on \topky{}. Hobbies soft are the 2nd most engaging macro category on \pravda{}, but we cannot compare it to \topky{}, since we have not collected lifestyle articles from their website due to most of the articles not having discussions. Although \topky{} have 3x more articles in the tabloid macro category, they have almost 30x more comments under such articles, showing that their articles are far more engaging. On the other hand the tabloid articles have by far the worst reply ratio and comment length across both domains, showing users might just want to leave their short remarks or complaints about the topics of the articles and discuss less with each other. Finally, sports is by far the least engaging category in \topky{} by comments per article and upvotes scores. This might be explained by the fact, that the sports articles report on many niche sport results with short messages which result in a large volume (19176) of articles, which are consequently not as engaging for users.
+
+\begin{table}[H]
+	\centering
+	\small
+	\resizebox{\textwidth}{!}{%
+		\begin{tabular}{@{}llrrrrrr@{}}
+			\toprule
+			\textbf{Domain} & \makecell{\textbf{Macro}                                                      \\ \textbf{Category}} & \makecell{\textbf{Total} \\ \textbf{Comments}} & \makecell{\textbf{Per Art.}} & \makecell{\textbf{Mean} \\ \textbf{Chars.}} & \makecell{\textbf{Reply} \\ \textbf{Ratio}} & \makecell{\textbf{Mean} \\ \textbf{Upvotes}} & \makecell{\textbf{Mean} \\ \textbf{Downvotes}} \\ \midrule
+			pravda.sk
+			                & hard\_news               & 511,220   & 36.90 & 113.38 & 59.60\% & 2.33 & 0.00 \\
+			                & hobbies\_soft            & 48,008    & 6.48  & 127.71 & 55.96\% & 1.81 & 0.00 \\
+			                & sports                   & 29,101    & 5.21  & 124.81 & 52.66\% & 1.83 & 0.00 \\
+			                & tabloid                  & 3,543     & 2.12  & 91.59  & 38.61\% & 1.96 & 0.00 \\
+			                & other                    & 3,218     & 3.23  & 143.98 & 53.60\% & 1.53 & 0.00 \\ \midrule
+			topky.sk
+			                & hard\_news               & 2,000,910 & 66.82 & 103.57 & 57.09\% & 1.37 & 0.54 \\
+			                & sports                   & 49,931    & 2.60  & 106.49 & 50.87\% & 0.77 & 0.37 \\
+			                & tabloid                  & 103,272   & 18.96 & 89.32  & 38.61\% & 1.90 & 0.37 \\
+			                & other                    & 380       & 0.88  & 92.35  & 47.37\% & 0.87 & 0.66 \\ \bottomrule
+		\end{tabular}%
+	}
+	\caption{Comment statistics broken down by domain and macro category. Third column shows mean comment count per article. Fourth column shows mean leangth of comment in characters. Fifth column shows ratio of comments replying to some other comment to total comments. Sixth column for \pravda{} shows net score (upvotes minus downvotes), since they do not show both values separately.}
+	\label{tab:comment_cat_stats}
+\end{table}
+
+
+\subsection{Sentiment Analysis}
+Using the \texttt{Hugging Face Transformers} library \cite{Wolf2020}, we utilized the masked language model SlovakBERT \cite{Pikuliak2022} based on the RoBERTa architecture, the first transformer-based language model trained on Slovak-only dataset. Note that there is a Slovak version of the WikiBERT model, but that model is only trained on a Wikipedia articles corpus, which has insufficient variety. The authors fine-tuned their model for the task of sentiment analysis on multilingual Twitter dataset \cite{Mozetic2016} achieving best performance with the model compared to other classification methods.
+
+The model outputs sentiment labels: \textit{positive, neutral} and \textit{negative} along with a confidence score, which we stored in our database in the \texttt{sentiment} and \texttt{sentiment\_score} columns respectively. For the purposes of the sentiment analysis the text sentiment labels were converted into real numbers $1.0,\ 0.0$ and $-1.0$ for labels \textit{positive, neutral} and \textit{negative} respectively. Due to hardware and time limits, we used the tokenizer's \texttt{max\_length} attribute to truncate the comments and articles to $512$ tokens and enabled padding for each batch. Note that only $0.06\%$ of the $2749583$ comments had more than $512$ tokens, so the context loss for sentiment analysis was minimal. For articles however, when using all \texttt{title}, \texttt{perex} and \texttt{content} concatenated, $39.04\%$ of the $84522$ articles exceeded the $512$ token threshold. To avoid this context loss, we decided to only use \texttt{title} and \texttt{perex} concatenated together, since perex should be the summary of the articles content anyways. This way $0$ articles exceeded the $512$ token threshold. Finally, to filter out the noise and uninformative articles, we removed articles with $\leq 5$ comments, which left us with $27305$ articles.
+
+\subsection{Article and discussion summarizations}
+To generate article and comment section summarizations, we used the \texttt{Qwen-2.5-3B-Instruct} \cite{Yang2024} model due to its great size-to-performance ratio. Our goal was to use this model to generate a few zero-shot example summaries. To evaluate the model's ability to generate proper summaries, we first evaluated it on the SlovakSUM \cite{Ondrejova2024} dataset, which contains over 100,000 articles from various Slovak news sources along with their human crafted summaries (perex of the article). We evaluated the model's zero-shot performance using the $ROUGE$ metrics \cite{Lin2004} R-1, R-2 and R-L. To calculate the $ROUGE$ scores we first lemmatized the summaries using the \texttt{simplemma} library \cite{Barbaresi2024} and then computed the scores using the \texttt{evaluate} and \texttt{rouge-score} libraries. We also computed the $ROUGE_{RAW}$ scores using the same libraries, but without lemmatizing the summaries.
+
+Furthermore, we fine-tuned the Qwen model with the LoRA method \cite{Hu2021} for $1$ epoch on a sample of $6400$ training articles from the SlovakSUM \cite{Ondrejova2024} dataset. We used the Parameter-Efficient Fine-Tuning (peft) \cite{Mangrulkar2022} and Transformers Reinforcement Learning (trl) \cite{Vonwerra2020} libraries. The exact configuration parameters can be seen in Table \ref{tab:summarization_hyperparams} and the system and user prompts can be seen in Table \ref{tab:summarization_prompt}.
+
+\begin{table}[H]
+	\centering
+	\scriptsize
+	\begin{tabular}{@{}ll@{}}
+		\toprule
+		\textbf{Hyperparameter}     & \textbf{Value}                     \\ \midrule
+		\multicolumn{2}{@{}l}{\textit{LoRA Configuration}}               \\ \midrule
+		Rank ($r$)                  & 8                                  \\
+		Alpha ($\alpha$)            & 16                                 \\
+		Target Modules              & \texttt{q\_proj}, \texttt{v\_proj} \\
+		Dropout                     & 0.05                               \\
+		Bias                        & none                               \\
+		Task Type                   & CAUSAL\_LM                         \\ \midrule
+		\multicolumn{2}{@{}l}{\textit{Training Arguments}}               \\ \midrule
+		Per-Device Batch Size       & 2                                  \\
+		Gradient Accumulation Steps & 4                                  \\
+		Effective Batch Size        & 8                                  \\
+		Learning Rate               & $5 \times 10^{-5}$                 \\
+		Max Steps                   & 800                                \\
+		Precision                   & fp16 (Mixed Precision)             \\
+		Optimizer                   & adamw\_torch                       \\ \bottomrule
+	\end{tabular}
+	\caption{LoRA configuration and training hyperparameters used for fine-tuning Qwen2.5-3B-Instruct \cite{Yang2024} on the SlovakSum \cite{Ondrejova2024} dataset.}
+	\label{tab:summarization_hyperparams}
+\end{table}
+
+\vspace{1em}
+
+\begin{table}[H]
+	\centering
+	\small
+	\begin{tabular}{@{}lp{12cm}@{}}
+		\toprule
+		\textbf{Role}      & \textbf{Content Structure}                                                                                                                      \\ \midrule
+		\textbf{system}    & Si profesionálny slovenský novinár. Zhrň nasledujúci text do jednej jedinej stručnej vety. Nepoužívaj žiadne úvodné frázy, začni priamo faktom. \\ \midrule
+		\textbf{user}      & \raggedright\arraybackslash Názov článku: \{title\} \par\vspace{0.5em} Článok: \par \{text (content)\}                                          \\ \midrule
+		\textbf{assistant} & \{sum (perex)\}                                                                                                                                 \\ \bottomrule
+	\end{tabular}
+	\caption{Prompt template used to format the SlovakSum dataset for instruction fine-tuning. The variables \{title\}, \{text\}, and \{sum\} were dynamically populated from the dataset.}
+	\label{tab:summarization_prompt}
+\end{table}
+
+To generate summaries of discussions while keeping in mind the computation limitations, we picked $5$ articles with largest comment count and used the $15$ comments with largest net score (upvotes minus downvotes) to capture the prevailing opinions of each article discussion. Since comments also need the context of the comment they are replying to, we included each parent comment recursively up to each chain's top-level comment. The hierarchical structure was then included in the prompt with the use of indentation. We also included each article's title in the prompt to give more context to the model. For the exact prompt structure see Table \ref{tab:comment_summarization_prompt}.
+
+\begin{table}[H]
+	\centering
+	\small
+	\begin{tabular}{@{}lp{12cm}@{}}
+		\toprule
+		\textbf{Role}   & \textbf{Content Structure}                                                                                                                                                                                                                                                                                                                                                                                                                                          \\ \midrule
+		\textbf{system} & Si nápomocný asistent. Tvojou úlohou je fakticky zosumarizovať náladu v slovenskej komentárovej sekcii. Zhrnutie musí obsahovať prevládajúcu náladu, hlavné argumenty a hlavné body konfliktu. Napíš to vo forme maximálne 10 stručných viet vo forme neštrukturovaného textu. Komentárovú sekciu dostaneš v hierarchickej forme (zisti podľa odsadenia, na ktorej úrovni si), keďže na komentáre sa dalo aj odpovedať. Jednotlivé vlákna sú oddelené viacerými --- \\ \midrule
+		\textbf{user}   & \raggedright\arraybackslash Názov článku: \{title\} \par\vspace{0.5em} Hierarchická štruktúra najlepších komentárov: \par \{summary\} \par\vspace{0.5em} Vygeneruj zhrnutie tejto diskusie:                                                                                                                                                                                                                                                                         \\ \bottomrule
+	\end{tabular}
+	\caption{Prompt template used to instruct the LLM to generate zero-shot summaries of hierarchical comment threads. Summary variable is a string containing the indented comments.}
+	\label{tab:comment_summarization_prompt}
+\end{table}
+
+An example of the indented comments can be seen below.
+\begin{tcolorbox}[colback=gray!5!white, colframe=gray!75!black, title=Example of Hierarchical Comment Input (\{summary\} variable), fonttitle=\bfseries, fontupper=\small\ttfamily\raggedright]
+	Pouzivatel: Warmonger (Skore: 22) \\
+	Komentar: Jediný kto podporuje Magyar je Zelenský.Keby aj vyhral, bude úplne izolovaný. Najväčší svetoví hráči USA, Rusko , Čína ho budú ignorovať. \\[0.5em]
+	---------------------------------------- \\[0.5em]
+	Pouzivatel: Cukrík. (Skore: 23) \\
+	Komentar: Liberáli prečo nejdete na front? \\
+	\hspace*{2em} Pouzivatel: Profik (Skore: 20) \\
+	\hspace*{2em} Komentar: Nemaju tam latecko a kde nabit kolobezky
+\end{tcolorbox}
+
+\subsection{User profiling}
+
+\subsubsection{Features}
+To profile users using clustering methods, we first chose 18 features to represent each user. Basic features include total comment count and average comment length. To capture the engagement of the user we also collect the average upvote count, average downvote count, number of top level comments to total number of comments (reply ratio) and number of replies received.
+
+Since bot accounts can have different activity patterns compared to normal users, we also include the total unique active days and total unique active hours, where active day is a day in which the user wrote at least 1 comment and an active hour is an hour of the day during which the user wrote at least 1 comment on any given day. Since we expected the bots to be more active during the night, we also captured the night activity ratio, which is the ratio of comments made between 00:00 and 05:59 in the morning.
+
+Since comments made closer to the publish time of the article tend to have more engagement, we also capture the average time to first comment. Note that we capture average time to first comment, not to publish time, since many articles have been republished/their publish time has been updated to drive engagement back to them or to reuse popular articles, which caused some of the comments to have negative time to publish. We also expected the behaviour of users to vary by macro category, so we also capture 4 different ratios of comments made in each of the macro categories, except \textit{other}, to total comments.
+
+Finally, since averaging statistics like comment length, upvotes, downvotes and time to publish smooth out the extreme outliers, we also calcaulated the standard deviations for these 4 metrics in addition to their averages. To avoid expensive computation, we calculated the standard deviation as $\sqrt{D(X)} = \sqrt{E[X^2] - (E[X])^2}$. If we realize, that $E[X]$ is just the average of the feature and $E[X^2]$ is just average of feature$^2$, we can see that both of these values can be computed directly in the database query. This left us only with simple calculations which can be done quickly even in Pandas \cite{Reback2020} \cite{McKinney2010}: squaring $E[X]$, subtracting the result from $E[X]^2$ and finally getting the square root of everything, which the Pandas library handles quickly. To identify latent (unobserved) behavioral patterns of users, we also applied Factor Analysis \cite{Spearman1904} (FA). Unlike PCA, which strictly maximizes data variance, FA models data as linear combinations of latent variables plus error terms. We extracted 4 latent factors and applied Varimax orthogonal rotation to maximize the variance of squared loadings, which in turn maximizes interpretability by ensuring that each features loads strongly onto only a single latent factor.
+
+\subsubsection{Methods}
+First, to filter out extreme noise from the data, we used the DBSCAN \cite{Ester1996} method. The method has 2 hyperparameters: $\epsilon$ and $minPts$. It works by first labeling each point with at least $minPts$ points in its $\epsilon$ radius as a core point. Then it picks a random unprocessed core point and adds points to its cluster which are in $\epsilon$ radius of any of the cluster's points until there are no such points. This process is repeated until no core points are left. The unprocessed nodes at this stage are labelled as noise. The best choice of $minPts$ hyperparameter has been shown to be $2\cdot feature\_cnt$ \cite{Sander1998}. To choose the best $\epsilon$ for fixed $minPts$, the original paper \cite{Ester1996} suggests plotting the sorted distances of $k$-th closest point to each point, where $k = minPts$ and then locating a $y$ value at which the distances start to increase more prominently. To find the distances of $k$-th closest point to all points we used the Nearest Neighbors method \cite{Fix1985}.
+
+After removing the noise users, we used two clustering methods: k-means \cite{Hartigan1979} and Partitioning Around Medoids (PAM) \cite{Kaufman2009}. Both methods first choose the initial cluster centers as $k$ points for a given $k$ and only differ in the method of optimizing the clusters. k-means \cite{Hartigan1979} assigns each point to the closest cluster center and then recalculates the center of the cluster to be the dimensional mean of all its points. This process is repeated until convergence. The k-means algorithm minimizes the sum of squares of distances from each point to its cluster center. PAM \cite{Kaufman2009} also assigns each point to its closest cluster center, but to update the cluster center it tries all the other points in the same cluster and then picks the one that minimizes the answer. This process repeats until convergence and the algorithm minimizes the sum of absolute distance from each point to its cluster center. To find the best algorithm and number of clusters $k$, we ran both algorithms for each $k \in \{2, 3, 4, 5, ..., 17\}$ and plotted the average silhouette scores \cite{Rousseeuw1987}. The silhouette score \cite{Rousseeuw1987} is a metric which measures how similar an object is to its own cluster compared to other elements in different clusters and its values range from $-1$ to $+1$, where high number indicates that the object is well matched to its own cluster and poorly matched to the other clusters. We used the \texttt{sklearn.cluster.KMeans} class from the \texttt{scikit-learn} library \cite{Pedregosa2011} with the default initialization and the \texttt{sklearn\_extra.cluster.KMedoids} class from the \texttt{sklearn\_extra} library with the \texttt{k-medoids++} initialization and \texttt{pam} method. To find the 4 latent behavioral patterns, we used the \texttt{sklearn.decomposition.FactorAnalysis} class from the \texttt{scikit-learn} library \cite{Pedregosa2011} with varimax rotation.
+
+Finally, to interpret the data, we first used Principal Component Analysis (PCA) \cite{Pearson1901} to project the data onto a 2D plane. This method works by calculating the covariance matrix $C=X^TX$ of the zero-centered data matrix $X$. The projection matrix $P$ is then formed by the eigenvectors of the covariance matrix, which are sorted in decreasing order by their eigenvalues. This ordering ensures that each component captures the maximum variance of the original data. Since PCA assumes the data is linear, we also used the t-distributed Stochastic Neighbor Embedding (tSNE) \cite{Maaten2008} method, which is an unsupervised machine learning method for visualizing non-linear data. We then looked into the feature distributions and feature importance by cluster by calculating the z-score of the mean of each feature per cluster. To analyze the temporal patterns of the clustered users, we used activity heatmaps per hour of each weekday and weekend and to overlap data with real-life events, we also plotted the daily 7-day moving average of comment volume per cluster for each week with published articles.
+
+\subsection{Generative AI} \label{sec:method_gen_ai}
+To generate maximally ragebaiting comments, we first had to determine what are ragebaiting comments. After profiling the users, we picked all comments of users from the cluster which grouped users with largest average downvotes. Out of these $\sim$ 140,000 comments we chose comments with at least 5 downvotes (or $\leq -5$ net score for \pravda{} comments) and with a length of at least 30 characters to pick the most deranged comments and to filter out random short meaningless replies. This left us with 3630 comments, which we split into 3267 training samples, 181 validation samples and 182 testing samples.
+
+To generate comments, we again chose the \texttt{Qwen-2.5-3B-Instruct} \cite{Yang2024} model due to hardware limitations. To fine-tune the model we used the LoRA method \cite{Hu2021} and trained the model for $6$ epochs on the training dataset with $20$ warmup steps. The full config can be seen in Table \ref{tab:generative_lora_config} and the messages format can be seen in Table \ref{tab:generative_prompts}.
+
+\begin{table}[H]
+	\centering
+	\small
+	\begin{tabular}{@{}lp{12cm}@{}}
+		\toprule
+		\textbf{Role}      & \textbf{Content Structure}                                                                                                                                       \\ \midrule
+		\textbf{system}    & Si typický slovenský internetový troll a hejter. Tvojou úlohou je napísať maximálne kontroverzný, provokatívny, útočný alebo cynický komentár k zadanému článku. \\ \midrule
+		\textbf{user}      & \raggedright\arraybackslash Nadpis článku: \{title\}                                                                                                             \\ \midrule
+		\textbf{assistant} & \{comment\_text\}                                                                                                                                                \\ \bottomrule
+	\end{tabular}
+	\caption{Prompt template used to format the comments dataset for instruction fine-tuning. The variables \{title\} and \{comment\_text\} were dynamically populated from the dataset.}
+	\label{tab:generative_prompts}
+\end{table}
+
+\vspace{1em}
+
+\begin{table}[H]
+	\centering
+	\small
+	\begin{tabular}{@{}ll@{}}
+		\toprule
+		\textbf{Hyperparameter}     & \textbf{Value}                                                                                                                      \\ \midrule
+		\multicolumn{2}{@{}l}{\textit{LoRA Configuration}}                                                                                                                \\ \midrule
+		Rank ($r$)                  & 16                                                                                                                                  \\
+		Alpha ($\alpha$)            & 32                                                                                                                                  \\
+		Target Modules              & \texttt{q\_proj}, \texttt{k\_proj}, \texttt{v\_proj}, \texttt{o\_proj}, \texttt{gate\_proj}, \texttt{up\_proj}, \texttt{down\_proj} \\
+		Dropout                     & 0.05                                                                                                                                \\
+		Bias                        & none                                                                                                                                \\
+		Task Type                   & CAUSAL\_LM                                                                                                                          \\ \midrule
+		\multicolumn{2}{@{}l}{\textit{Training Arguments}}                                                                                                                \\ \midrule
+		Per-Device Batch Size       & 8                                                                                                                                   \\
+		Gradient Accumulation Steps & 2                                                                                                                                   \\
+		Effective Batch Size        & 16                                                                                                                                  \\
+		Learning Rate               & $2 \times 10^{-4}$                                                                                                                  \\
+		LR Scheduler                & cosine                                                                                                                              \\
+		Warmup Steps                & 20                                                                                                                                  \\
+		Number of Training Epochs   & 6                                                                                                                                   \\
+		Max Sequence Length         & 512                                                                                                                                 \\
+		Precision                   & bf16 (BFloat16)                                                                                                                     \\ \bottomrule
+	\end{tabular}
+	\caption{LoRA configuration and training hyperparameters used for fine-tuning Qwen2.5-3B-Instruct \cite{Yang2024} to generate comments.}
+	\label{tab:generative_lora_config}
+\end{table}
+
+\vspace{1em}
+
+\subsection{Semantic analysis}
+Finally, to analyze the semantics of the discussion landscape, we first sampled 100,000 comments of length at least 20 to filter out noise and uninformative comments. For each comment we also gathered the profile cluster number of the commenter, the macro category of the article under which the comment was made and the sentiment of the comment as $-1.0$ for \textit{negative}, $0.0$ for \textit{neutral} and $1.0$ for \textit{positive}.
+
+Next, we used the SlovakBERT \cite{Pikuliak2022} model and the \texttt{sentence-transformers} \cite{Reimers2019} library to generate $768$ dimensional embeddings of the comments. Next, we used PCA \cite{Pearson1901} to reduce the number of dimensions while maintaing at least $95\%$ of the variance and finally we visualized the embeddings per cluster, per sentiment and per macro category with the Uniform Manifold Approximation and Projection (UMAP) \cite{McInnes2020} and tSNE \cite{Maaten2008} using the \texttt{umap-learn} \cite{McInnes2018} and \texttt{scikit-learn} \cite{Pedregosa2011} libraries. To find the best parameters for both algorithms, we searched $n\_neighbors \in \{2, 5, 10, 20, 50, 100, 200\}$ with \texttt{min\_dist} set to $0.67$ and \texttt{method} set \textit{cosine} for UMAP, which are the most used paramters for sentence embeddings and perplexity values $p \in \{2, 5, 10, 20, 50, 100\}$ for tSNE.
+
+\section{Results}
+
+\subsection{Sentiment analysis}
+The global correlation of article and comment sentiment was $0.20$, i.e. a small positive correlation indicating that comment sentiment usually follows the sentiment of the article. Breaking down the articles by domain shows that both domains have similar correlations: \pravda{} at $0.208$ correlation with $9467$ articles and \topky{} at $0.195$ at $17838$ articles. In Table \ref{tab:sentiment_category} we can see a breakdown by macro category, which shows that except the \textit{other} category, the \textit{sports} category has the highest correlation and the \textit{hard\_news} category has the lowest correlation. This can be explained by the fact that in sports articles, people usually cheer or congratulate if the article is writing about an achievement and they are hateful or negative when some results are sub-par. For the news category, the sentiment correlation is low, because no matter the topic, people always find something negative to talk about. Note that the \textit{other} category has articles from various categories which were given strange labels by the publishers and we only include those results for completeness.
+
+\begin{table}[H]
+	\centering
+	\small
+	\begin{tabular}{@{}lrr@{}}
+		\toprule
+		\textbf{Macro Category} & \textbf{Correlation} & \textbf{Article Count} \\ \midrule
+		other                   & 0.338                & 102                    \\
+		sports                  & 0.305                & 2,785                  \\
+		tabloid                 & 0.160                & 3,602                  \\
+		hobbies\_soft           & 0.115                & 1,247                  \\
+		hard\_news              & 0.093                & 19,569                 \\ \bottomrule
+	\end{tabular}
+	\caption{Article-comment sentiment correlation broken down by macro category.}
+	\label{tab:sentiment_category}
+\end{table}
+
+Further breakdown by domain and macro category seen in Table \ref{tab:domain_cat_breakdown} show, that the \textit{tabloid} and \textit{sports} categories have similar correlation per domain but interestingly, \topky{} have almost no linear correlation between \textit{hard\_news} articles and their comments, which cannot be said about the \pravda{} articles from the same category. The heatmap of the table can be seen in Figure \ref{fig:domain_cat_heatmap}.
+
+\begin{table}[H]
+	\centering
+	\small
+	\begin{tabular}{@{}llrr@{}}
+		\toprule
+		\textbf{Domain} & \textbf{Macro Category} & \textbf{Correlation} & \textbf{Article Count} \\ \midrule
+		pravda.sk       & other                   & 0.310                & 90                     \\
+		                & sports                  & 0.264                & 1,137                  \\
+		                & hard\_news              & 0.166                & 6,850                  \\
+		                & tabloid                 & 0.165                & 143                    \\
+		                & hobbies\_soft           & 0.115                & 1,247                  \\ \midrule
+		topky.sk        & other                   & 0.706                & 12                     \\
+		                & sports                  & 0.282                & 1,648                  \\
+		                & tabloid                 & 0.161                & 3,459                  \\
+		                & hard\_news              & 0.064                & 12,719                 \\ \bottomrule
+	\end{tabular}
+	\caption{Sentiment correlation broken down by domain and macro category. Sorted by domain and then correlation.}
+	\label{tab:domain_cat_breakdown}
+\end{table}
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.85\textwidth]{report_images/sentiment_domain_macro_category_heatmap.png}
+	\caption{Heatmap of sentiment correlation by domain and macro category.}
+	\label{fig:domain_cat_heatmap}
+\end{figure}
+
+Finally, the Table \ref{tab:core_10_micro} shows the top $10$ most positively correlated micro categories. The list supports the claim, that sports articles have high correlation, but we also find the \textit{poradna} micro category, which has mostly positive comments responding to the advice and \textit{rozhovory} where people usually comment on par with the general perception of the interviewed person/topic. On the other hand if we look at the top $10$ most negatively correlated micro categories seen in Table \ref{tab:neg_core_10_micro}, there are multiple topics (or sportsmen for that matter) which always have a number of users writing negative comments regardless of the success of the athletes. Note that only $9$ micro categories had negative correlation lower than $-0.1$, which shows that this is a rare pattern. Lastly, note that we excluded combinations/categories with $\leq 10$ articles to at least somewhat maintain statistical significance of the results.
+
+\begin{table}[H]
+	\centering
+	\small
+	\begin{tabular}{@{}lp{9cm}rr@{}}
+		\toprule
+		\textbf{Domain} & \textbf{Micro Category}                                                                                                                                                         & \textbf{Correlation} & \textbf{Count} \\ \midrule
+		pravda.sk       & poradna                                                                                                                                                                         & 0.689                & 19             \\
+		topky.sk        & uvod $\rightarrow$ futbal $\rightarrow$ spanielsko $\rightarrow$ la liga                                                                                                        & 0.682                & 11             \\
+		topky.sk        & uvod $\rightarrow$ futbal $\rightarrow$ reprezentacia $\rightarrow$ ms vo futbale                                                                                               & 0.644                & 11             \\
+		topky.sk        & uvod $\rightarrow$ tenis $\rightarrow$ wta                                                                                                                                      & 0.622                & 15             \\
+		pravda.sk       & hokej $\rightarrow$ extraliga                                                                                                                                                   & 0.596                & 24             \\
+		topky.sk        & uvod $\rightarrow$ futbal $\rightarrow$ reprezentacia $\rightarrow$ futbalova reprezentacia do 21 rokov $\rightarrow$ me vo futbale do 21 rokov $\rightarrow$ slovaci na me u21 & 0.568                & 11             \\
+		topky.sk        & uvod $\rightarrow$ futbal $\rightarrow$ reprezentacia $\rightarrow$ futbalova reprezentacia do 21 rokov $\rightarrow$ me vo futbale do 21 rokov                                 & 0.555                & 12             \\
+		topky.sk        & uvod $\rightarrow$ futbal $\rightarrow$ ostatne                                                                                                                                 & 0.531                & 27             \\
+		pravda.sk       & rozhovory                                                                                                                                                                       & 0.516                & 12             \\
+		topky.sk        & uvod $\rightarrow$ ostatne $\rightarrow$ bojove sporty                                                                                                                          & 0.504                & 19             \\ \bottomrule
+	\end{tabular}
+	\caption{Top 10 most positively correlated micro categories ($> 10$ articles). The micro categories were normalized by romanizing and lower casing the characters.}
+	\label{tab:core_10_micro}
+\end{table}
+
+\vspace{1em}
+
+\begin{table}[H]
+	\centering
+	\small
+	\begin{tabular}{@{}lp{9cm}rr@{}}
+		\toprule
+		\textbf{Domain} & \textbf{Micro Category}                                                                                                   & \textbf{Correlation} & \textbf{Count} \\ \midrule
+		topky.sk        & uvod $\rightarrow$ futbal $\rightarrow$ slovaci v zahranici                                                               & $-0.426$             & 12             \\
+		pravda.sk       & film-a-televizia                                                                                                          & $-0.335$             & 28             \\
+		topky.sk        & uvod $\rightarrow$ futbal $\rightarrow$ reprezentacia                                                                     & $-0.223$             & 52             \\
+		topky.sk        & uvod $\rightarrow$ ostatne $\rightarrow$ zimne sporty $\rightarrow$ lyzovanie $\rightarrow$ petra vlhova                  & $-0.189$             & 17             \\
+		pravda.sk       & zdrava-vyziva                                                                                                             & $-0.165$             & 29             \\
+		topky.sk        & uvod $\rightarrow$ hokej $\rightarrow$ zamorske sutaze                                                                    & $-0.125$             & 12             \\
+		pravda.sk       & analyzy-a-postrehy                                                                                                        & $-0.122$             & 83             \\
+		topky.sk        & ekonomika                                                                                                                 & $-0.117$             & 16             \\
+		topky.sk        & uvod $\rightarrow$ hokej $\rightarrow$ reprezentacia $\rightarrow$ ms v hokeji $\rightarrow$ online prenosy z ms v hokeji & $-0.114$             & 19             \\
+		pravda.sk       & futbal $\rightarrow$ nike-liga                                                                                            & $-0.066$             & 67             \\ \bottomrule
+	\end{tabular}
+	\caption{Top 10 most negatively correlated micro categories ($> 10$ articles). The micro categories were normalized by romanizing and lower casing the characters.}
+	\label{tab:neg_core_10_micro}
+\end{table}
+
+Next, we looked into which article sentiment drives the most comments. Looking at the box-plots in Figure \ref{fig:volume_box_plots}, we see that negative sentiment drives the most comments especially in the hard news category due to the topics being most polarizing and discussion igniting. Hobbies and tabloid have slightly lower volume of comments under articles with positive sentiment. Lastly, the comment volume in sports articles seems to be unaffected by the sentiment of the articles.
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.75\textwidth]{report_images/volumn_sentiment_correlation.png}
+	\caption{Box plots of comment volume per sentiment and macro category on logarithmic scale. Sentiment and macro categories are on the x-axis and logarithmically scaled comment volume is on the y-axis.}
+	\label{fig:volume_box_plots}
+\end{figure}
+
+An important metric for analyzing comment section is polarization, which we measure as the standard deviation of comment sentiment per article. As seen in Figure \ref{fig:polarization_large}, \topky{} website is more polarizing for users, which we can also observe in the bottom row of the figure, showing smaller polarization in each macro category. This might be explained by the fact, that \topky{} use the \disqus{} platform used across various websites, whereas \pravda{} uses their in-house solution, which requires users to create a separate account just for that website, which discourages more people and in turn results in \pravda{} commenters having more similar sentiment on topics. Next, we can see that \textit{tabloid} and \textit{sports} macro categories are the most polarizing, whereas the \textit{hard\_news} macro category is the least polarizing, which might be explained by the fact, that even though it drives most of the engagement and the commenters argue a lot, they argue in more similar sentiment compared to \textit{tabloid} or \textit{sports} macro categories. This is supported by the list of top 15 most polarizing micro categories in Figure \ref{fig:polarization_tops}, where majority of the list is occupied by sports topics and a large tabloid micro category \textit{prominenti - osobnosti} (celebrities). On the other hand, peaceful lifestyle/hobbies topics occupy the least polarizing list.
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=1\textwidth]{report_images/polarization_micro_categories.png}
+	\caption{Bar plot with polarization on x-axis and micro categories on the y-axis. The plot on the left shows micro categories ordered from most polarizing and the plot on the right shows micro categories in least polarizing order.}
+	\label{fig:polarization_tops}
+\end{figure}
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.85\textwidth]{report_images/polarization_domain_macro_category.png}
+	\caption{Bar plots showing polarization across domains, macro categories and both domain and macro category. The polarization is on y-axis and combinations of domain and macro category are on the x-axis.}
+	\label{fig:polarization_large}
+\end{figure}
+
+Finally, when breaking down polarization by sentiment, positive articles seem to be more polarizing as seen in Figure \ref{fig:polarization_sentiment}. This seems natural, as negative articles usually get negative comments, but positive articles such as sport results tend to have more mixed opinions.
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.67\textwidth]{report_images/polarization_sentiment.png}
+	\caption{Bar plot showing polarization by sentiment. The sentiment is on the x-axis and the polarization is on the y-axis.}
+	\label{fig:polarization_sentiment}
+\end{figure}
+
+\subsection{Article and discussion summaries}
+First, we compared the zero-shot summary capability of the \texttt{Qwen-2.5-3B-Instruct} \cite{Yang2024} model with the \texttt{mBART\textsubscript{8}} model used in the SlovakSUM paper \cite{Ondrejova2024} on their dataset. The comparison in Table \ref{tab:summary_comparison} shows that the Qwen model beats the authors' fine-tuned model on ROUGE R-1, meaning it can capture the most important keywords better, likely due to having $\sim4$x more parameters. Unfortunately, the model is worse on all other metrics, meaning it fails to capture the syntactic structure and Slovak-specific phrasing. For further context, the Qwen model achieved a BERTScore Precision of 0.7492, Recall of 0.7661, and F1 of 0.7568.
+
+Unfortunately, due to hardware and time constraints, our attempts to fine-tune the model via LoRA \cite{Hu2021} resulted in degraded performance, likely due to an insufficient number of training epochs and steps. Consequently, we used the base instruction-tuned model to generate examples of both article and discussion summaries presented in Tables \ref{tab:generated_article_summaries} and \ref{tab:generated_discussion_summaries}, with temperature set to 0.2.
+
+A closer look at the generated summaries reveals that despite capturing the key factual points, the model struggles with Slovak morphology, mixing Czech and Slovak and hallucinating non-existent word forms (\textit{fakturomi}).
+
+\begin{table}[H]
+	\centering
+	\small
+	\begin{tabular}{@{}l|ccc|ccc@{}}
+		\toprule
+		                                    & \multicolumn{3}{c|}{\textbf{ROUGE (Lemmatized)}} & \multicolumn{3}{c}{\textbf{ROUGE\textsubscript{RAW}}}                                                                    \\ \midrule
+		\textbf{Model}                      & \textbf{R-1}                                     & \textbf{R-2}                                          & \textbf{R-L}   & \textbf{R-1}   & \textbf{R-2}  & \textbf{R-L}   \\ \midrule
+		mBART\textsubscript{8} (Fine-tuned) & 21.73                                            & \textbf{10.58}                                        & \textbf{18.37} & \textbf{20.80} & \textbf{9.00} & \textbf{18.50} \\  \midrule
+		Qwen2.5-3B (Zero-shot)              & \textbf{24.00}                                   & 8.49                                                  & 17.78          & 19.94          & 6.18          & 14.94          \\
+		Qwen2.5-3B (Fine-tuned)             & 20.85                                            & 7.77                                                  & 16.84          & 18.05          & 6.54          & 14.78          \\ \bottomrule
+	\end{tabular}
+	\caption{Comparison of summarization performance on the SlovakSUM dataset. The mBART\textsubscript{8} scores are sourced from the SlovakSUM paper \cite{Ondrejova2024}.}
+	\label{tab:summary_comparison}
+\end{table}
+
+\vspace{1em}
+
+\begin{table}[H]
+	\centering
+	\scriptsize
+	\begin{tabular}{@{} >{\raggedright\arraybackslash}p{3.5cm} >{\raggedright\arraybackslash}p{5.5cm} >{\raggedright\arraybackslash}p{5.5cm} @{}}
+		\toprule
+		\textbf{Article Title}                                                                                         & \textbf{Original Perex (Reference)}                                                                                                                                                                                                                                               & \textbf{LLM Generated Summary (Zero-shot)}                                                                                                                                                \\ \midrule
+		Kto môže parkovať pod vlastným oknom? Rezidentské parkovanie sa ocitlo na hrane zákona, upozorňuje prokuratúra & Parkovanie je téma, na ktorej sa zhodne takmer každý – áut pribúda, parkovacích miest ubúda. Mestá reagujú sprísňovaním regulácie, no podľa prokuratúry tým často prekračujú zákon. Predseda parlamentu Richard Raši (Hlas) preto zvolal na pôde Národnej rady SR okrúhly stôl... & Generálna prokuratúra zistila 80\% nezákonných aktov v rezidentskom parkovaniu v 460 prípadoch, čo vyvolalo 372 protestov a 79 upozornení, a navrhnuje jeho legislatívnu úpravu.          \\ \midrule
+		Šokujúce priznanie matky Miley Cyrus: Po rozvode užívala DROGY... Na samoliečenie!                             & LOS ANGELES - Tish Cyrus otvorene prehovorila o jednom z najťažších období svojho života. Po rozvode s Billym Rayom Cyrusom a smrti svojej mamy priznala, že boj s úzkosťou riešila užívaním drog.                                                                                & Tish Cyrus po rozvode s Billym Raym Cyrusom siahala po marihuane ako formu samoliečenia, ktorá však potom potvrdila, že bolo aj nevedomé samoliečenie po smrti mamy a rozpade manželstva. \\ \midrule
+		Na Ukrajine padol veliteľ ruských partizánov bojujúcich proti Putinovi Denis Kapustin                          & Veliteľ a zakladateľ Ruského dobrovoľníckeho zboru Denis Kapustin, bojujúci na strane Ukrajiny, zahynul v noci na sobotu pri útoku v Záporožskej oblasti. Oznámil to jeho dobrovoľnícky zbor na platforme Telegram.                                                               & Denis Kapustin, ruský veliteľ ruských partizánov bojujúcich proti Putinovi na Ukraince, dnes večer padol v zásahu drona počas bojovej úlohy.                                              \\ \bottomrule
+	\end{tabular}
+	\caption{Examples of zero-shot article summaries generated by Qwen2.5-3B-Instruct \cite{Yang2024} compared against the original publisher perex.}
+	\label{tab:generated_article_summaries}
+\end{table}
+
+\vspace{1em}
+
+\begin{table}[H]
+	\centering
+	\scriptsize
+	\begin{tabular}{@{} >{\raggedright\arraybackslash}p{5cm} r >{\raggedright\arraybackslash}p{8cm} @{}}
+		\toprule
+		\textbf{Article Title}                                                                                    & \textbf{Comments} & \textbf{LLM Summary}                                                                                                                                                                                                                                                                                            \\ \midrule
+		MIMORIADNY ONLINE Viktor Orbán priznal porážku v parlamentných voľbách: Maďarsko si zvolilo nového lídra  & 7,372             & Prevládá negativná náladu, s ozbrojeným konfliktem medzi progresivnými a fakturomi. Progresivní subjekty zdarma kritizujú zvýšenú izoláciu USA, Ruska a Číny od Maďarska. Faktuři však zdarma podporujú Viktora Orbána... Diskusia sa stretáva aj s politickými kontroverziami medzi Ficovym a Orbánym.         \\ \midrule
+		MIMORIADNE CHAOS po útoku USA a zajatí Madura: Trump oznámil nové vedenie, ZVRAT po slovách Rodríguezovej & 5,166             & Prevládá nepriateľská a nepriateľská náladu. Argumenty označujú útoky USA na Venezuely ako demokratické a zamezenie drogových kartelov. Konflikt je spojen s rozborem ropného majetku a bojem o kontrolu nad ropou. Nezanesené je vzájomné odporu a zdržanie konfliktu.                                         \\ \midrule
+		MIMORIADNE Vojna v Iráne sa ZAČALA: Trump a Izrael udreli v Teheráne, krajina hlási raketový protiútok!   & 4,521             & Prevládá negativná náladu a konfliktovateľný atmosféru v komentáre. Argumenty zahrnujú financovanie konfliktovými silami, zákulisné ťahy a finančné závislosti. Nebezpečenstvom spočívajú jadrové zbrane, raketové protiútoky... Konfliktové strany sú označované jako financujúci zákulisné ťahy a zaražujúce. \\ \bottomrule
+	\end{tabular}
+	\caption{Examples of zero-shot discussion summaries. The prompt included the hierarchical thread structure of the most upvoted comments. Noticeable linguistic degradation into Czechoslovak syntax is apparent.}
+	\label{tab:generated_discussion_summaries}
+\end{table}
+
+\subsection{User profiling} \label{sec:results_user_profiling}
+After filtering out users with $\leq 5$ comments, we were left with $6319$ users with $18$ features for each of them. Next, we chose $\epsilon = 3.5$ based on the $k$-th nearest neighbor chart seen in Figure \ref{fig:dbscan_e_search}, which filtered out $215$ users ($3.40\%$). Note that we chose $\epsilon = 3.5$ over $\epsilon = 4.0$, since it removed too few ($114$) users ($1.80\%$).
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.75\textwidth]{report_images/dbscan_choose_e.png}
+	\caption{Line plot showing $k$-th nearest neighbor distances for each point sorted by increasing distance. The count of points is on the x-axis and the distance is on the y-axis. We can see a sharp incline around the red line, which is placed at $y=4.0$.}
+	\label{fig:dbscan_e_search}
+\end{figure}
+
+Next, to find the number of clusters $k$, we ran both the KMeans \cite{Hartigan1979} and PAM \cite{Rousseeuw1987} algorithms for each fixed number of clusters $k \in \{2, 3, 4, ..., 17\}$. In Figure \ref{fig:cluster_silhouette} we can see the average silhouette score for both algorithms and each $k$. There is a noticable dropoff in silhouette score after $k=11$ for PAM, which is generally considered a more accurate clustering method, therefore out of the remaning options, we picked $k=6$ and the KMeans algorithm \cite{Hartigan1979}, since it has the largest silhouette score and it is a reasonable number of groups of users without too much granularity. Finally, the silhouette score distributions for $k=6$ and $k=7$ can be seen in Figures \ref{fig:silhouette_plot_6} and \ref{fig:silhouette_plot_7} respectively. Plots for other values of $k$ are ommited due to their size and the increased number of misclustered users, i.e. users with negative silhouette score.
+
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.75\textwidth]{report_images/clustering_silhouette.png}
+	\caption{Line plot showing silhouette scores for KMeans and PAM clustering methods. The number of clusters $k$ is on the x-axis and the average silhouette score is on the $y$-axis. The KMeans algorithm is represented by the blue line and the PAM algorithm is represented by the red line.}
+	\label{fig:cluster_silhouette}
+\end{figure}
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.75\textwidth]{report_images/silhouette_plot_6.png}
+	\caption{Line plot showing silhouette scores for KMeans and PAM clustering methods for $k=6$. The silhouette score is on the x-axis and the users ordered by their cluster and then their silhouette score in decreasing order are on the $y$-axis.}
+	\label{fig:silhouette_plot_6}
+\end{figure}
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.75\textwidth]{report_images/silhouette_plot_7.png}
+	\caption{Line plot showing silhouette scores for KMeans and PAM clustering methods for $k=7$. The silhouette score is on the x-axis and the users ordered by their cluster and then their silhouette score in decreasing order are on the $y$-axis.}
+	\label{fig:silhouette_plot_7}
+\end{figure}
+
+Finally, after clustering the users with the KMeans \cite{Hartigan1979} algorithm into $k=6$ clusters and averaging each numerical feature, we get the clusters with features detailed in \ref{tab:user_profiles}. We characterize the clusters as following:
+
+\begin{itemize}
+	\item \textbf{Cluster 0 (average readers)}: represents the baseline users with low total comment volume, average comment length, average daily comment volume and time to comment. Their comments have average engagement and they reply to and get replied to about $50\%$ of time and finally, comment mostly in the hard news macro category. These are the normal users making up little under $20\%$ percent of the users.
+	\item \textbf{Cluster 1 (spambots)}: very fast time to comment ($1$ hour on average) and very small standard deviation to comment. The comments are generally short with a very small standard deviation, they are active for almost half of the day, yet they have basically zero engagement and comment mostly under hard news and occasionally under tabloid articles. This is very likely an automated bot or human organized campaign, which surprisingly consists of almost $20\%$ of the users.
+	\item \textbf{Cluster 2 (essayists)}: have an above average comment volume and around $\sim 50\%$ longer comments than the rest of the users. They have a high average number of upvotes ($2.41$) and almost $0$ downvotes (likely only \pravda{} users, since we only store their net score in the upvotes column) and they comment mostly on hard news. These represent the respected contributors who write long though-out paragraphs which the community generally agrees with.
+	\item \textbf{Cluster 3 (entertainment fans)}: have the largest time to reply ($167$ hours or $\sim 1$ week) and they comment mostly in the sports and tabloid macro categories. These are the casual scrollers, which catch up sports results or celebrity gossip and do not follow breaking political news. They make up only $5\%$ of the users.
+	\item \textbf{Cluster 4 (trolls)}: highest average downvotes ($0.79$), huge downvote standard deviation ($1.37$), highest replies received ($0.62$) and the highest night activity ratio ($0.10$). These are the "ragebaiters" dropping the most outlandish provocative comments on political articles, receive the most downvotes and bait people into the replying. They make up around $16\%$ of the users.
+	\item \textbf{Cluster 5 (keyboard warriors)}: absolutely insane comment volume ($1672$), comments per day ($13.41$) and are active all day ($19.17$ hours). They reply the most out of all users and receive a high number of replies, above average number of downvotes ($0.39$) with large standard deviation, but they also receive some amount of upvotes ($1.51$). Finally, they comment almost exclusively in the hard news category. These are the chronically online arguers sitting behind their keyboards all day and their online existence is centered our arguing with people under political articles. They also make up the largest cluster at $1372$ users.
+\end{itemize}
+
+\begin{table}[H]
+	\centering
+	\footnotesize
+	\renewcommand{\arraystretch}{1.05}
+	\begin{tabular}{@{}lrrrrrr@{}}
+		\toprule
+		\textbf{Feature (Mean)}         & \textbf{Cluster 0} & \textbf{Cluster 1} & \textbf{Cluster 2} & \textbf{Cluster 3} & \textbf{Cluster 4} & \textbf{Cluster 5} \\ \midrule
+		User Count                      & 1,201              & 1,254              & 822                & 437                & 1,018              & 1,372              \\ \midrule
+		\multicolumn{7}{@{}l}{\textit{Volume \& Text Attributes}}                                                                                                     \\ \midrule
+		Total Comments                  & 30.17              & 24.72              & 175.54             & 102.50             & 144.56             & 1,672.93           \\
+		Avg. Comment Length (chars)     & 115.81             & 90.68              & 151.15             & 105.65             & 109.60             & 107.99             \\
+		Std. Dev. Comment Length        & 90.09              & 22.23              & 111.70             & 84.31              & 93.37              & 110.08             \\ \midrule
+		\multicolumn{7}{@{}l}{\textit{Temporal Patterns}}                                                                                                             \\ \midrule
+		Comments per Active Day         & 3.21               & 10.15              & 2.26               & 2.53               & 2.64               & 13.41              \\
+		Unique Active Hours / Day       & 8.05               & 8.08               & 14.54              & 10.36              & 14.58              & 19.17              \\
+		Night Activity Ratio            & 0.05               & 0.00               & 0.04               & 0.08               & 0.10               & 0.05               \\
+		Avg. Time to Comment (hrs)      & 34.03              & 1.07               & 13.20              & 167.24             & 90.02              & 38.49              \\
+		Std. Dev. Time to Comment       & 103.52             & 2.64               & 36.25              & 738.32             & 676.30             & 424.31             \\ \midrule
+		\multicolumn{7}{@{}l}{\textit{Engagement Metrics}}                                                                                                            \\ \midrule
+		Reply Ratio (Outbound)          & 0.53               & 0.01               & 0.43               & 0.46               & 0.40               & 0.58               \\
+		Avg. Replies Received (Inbound) & 0.49               & 0.01               & 0.58               & 0.47               & 0.62               & 0.54               \\
+		Avg. Upvotes                    & 1.43               & 0.02               & 2.41               & 1.35               & 2.30               & 1.51               \\
+		Std. Dev. Upvotes               & 1.70               & 0.03               & 2.37               & 1.84               & 3.42               & 2.16               \\
+		Avg. Downvotes                  & 0.31               & 0.02               & 0.00               & 0.31               & 0.79               & 0.39               \\
+		Std. Dev. Downvotes             & 0.51               & 0.04               & 0.01               & 0.60               & 1.37               & 0.75               \\ \midrule
+		\multicolumn{7}{@{}l}{\textit{Topical Preferences (Ratios)}}                                                                                                  \\ \midrule
+		Hard News                       & 0.90               & 0.79               & 0.73               & 0.22               & 0.84               & 0.93               \\
+		Sports                          & 0.03               & 0.00               & 0.07               & 0.40               & 0.03               & 0.02               \\
+		Tabloid                         & 0.06               & 0.21               & 0.01               & 0.37               & 0.13               & 0.04               \\
+		Hobbies (Soft News)             & 0.01               & 0.00               & 0.18               & 0.01               & 0.00               & 0.01               \\ \bottomrule
+	\end{tabular}
+	\caption{Transposed feature matrix detailing the final 6 user personas discovered via K-Means clustering. Values represent the cluster centroids (dimensional means) across all 18 engineered features.}
+	\label{tab:user_profiles}
+\end{table}
+
+The profile personas characterizations are supported by violin plots in Figure \ref{fig:feature_distribution}, showing feature distributions per cluster for a subset of the features and the heatmap in Figure \ref{fig:feature_importance} shows the z-scores of the means of features for each cluster, which were computed using the \texttt{sklearn.preprocessing.StandardScaler} from the \texttt{scikit-learn} library \cite{Pedregosa2011}.
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.85\textwidth]{report_images/feature_distributions.png}
+	\caption{Violin plots showing per cluster distributions of various features. On x-axis is the cluster number and on y-axes are the feature values. The width of the violin represents the number of users with that feature value in a particular cluster. The small white stripe represents the median feature value and the larger black/gray box with the white stripe inside represents the interquartile range of users (the middle $50\%$). The thin lines (whiskers) represent the end of the distribution (the outliers).}
+	\label{fig:feature_distribution}
+\end{figure}
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.8\textwidth]{report_images/feature_importance.png}
+	\caption{Heatmap showing per cluster feature importance. The features are on the x-axis and the clusters are on the y-axis with values being standardized means of the feature values per cluster. Darker colors represent more important features. Positive/negative values mean the cluster has above/below average values of the particular feature.}
+	\label{fig:feature_importance}
+\end{figure}
+
+To visually inspect the clustering quality, we used PCA \cite{Pearson1901} and tSNE \cite{Maaten2008} to visualize the users with their cluster colors in 2D and 3D space along with the noise users removed by DBSCAN. In Figure \ref{fig:users_2dpca} we can see the 2D PCA projection of the users, which captures $41.52\%$ of the variance. Cluster $1$ (the spambots) is the most separated, but the clusters are pretty clearly defined, even though clusters $0$, $2$ and $4$ have a significant overlap in 2-dimensional space. The 3D PCA projection capturing $52.16\%$ of the variance can be seen in Figure \ref{fig:users_3dpca}, which shows a superior separation of the majority of the clusters. The interactive 3D projection plot can be found in the appendix. Looking at the tSNE 2-dimensional projection of the users in Figure \ref{fig:users_2dtsne}, we can observe that some of the clusters, in particular clusters $0$ and $1$ have many users that seem to be misclassified or at least in different parts of the plot, which is supported by the larger number of users with negative silhouette scores in Figure \ref{fig:silhouette_plot_6}.
+
+\begin{figure}[H]
+	\centering
+	\begin{subfigure}[t]{0.45\textwidth}
+		\centering
+		\includegraphics[width=\textwidth]{report_images/users_2dpca.png}
+		\caption{2D PCA projection of the user clusters.}
+		\label{fig:users_2dpca}
+	\end{subfigure}
+	\hfill
+	\begin{subfigure}[t]{0.45\textwidth}
+		\centering
+		\includegraphics[width=\textwidth]{report_images/users_3dpca.png}
+		\caption{3D PCA projection of the user clusters.}
+		\label{fig:users_3dpca}
+	\end{subfigure}
+	\caption{PCA projections of user clusters. The x, y and z-axes show the 1st, 2nd and 3rd principal components respectively.}
+	\label{fig:users_pca}
+\end{figure}
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.5\textwidth]{report_images/users_2dtsne.png}
+	\caption{2D tSNE projection of the user clusters. The x and y-axes show the 1st and 2nd components respectively.}
+	\label{fig:users_2dtsne}
+\end{figure}
+
+Furthermore, to verify that the users labeled as noise by DBSCAN are truly outliers, we also added noise users into the 2D and 3D PCA projections seen in Figures \ref{fig:all_users_2dpca} and \ref{fig:all_users_3dpca}. The 2D projection shows that a large part of the noise users are in the middle of the plot, but the 3D projection shows that they truly are mostly outliers. The interactive version of the 3D projection can be found in the appendix.
+
+\begin{figure}[H]
+	\centering
+	\begin{subfigure}[t]{0.45\textwidth}
+		\centering
+		\includegraphics[width=\textwidth]{report_images/all_users_2dpca.png}
+		\caption{2D PCA projection of the user clusters and noise users.}
+		\label{fig:all_users_2dpca}
+	\end{subfigure}
+	\hfill
+	\begin{subfigure}[t]{0.45\textwidth}
+		\centering
+		\includegraphics[width=\textwidth]{report_images/all_users_3dpca.png}
+		\caption{3D PCA projection of the user clusters and noise users.}
+		\label{fig:all_users_3dpca}
+	\end{subfigure}
+	\caption{PCA projections of user clusters and noise users. The x, y and z-axes show the 1st, 2nd and 3rd principal components respectively.}
+	\label{fig:all_users_pca}
+\end{figure}
+
+Next, in Figure \ref{fig:pca_loadings} we can see the PCA loadings showing the directions of correlation for each feature. This plot beautifully shows how each feature correlates (or does not correlate) with each cluster, e.g. the clusters $1$ and $5$ have the highest comments per day, whereas cluster $3$ comments mostly in tabloid and sports. Lastly, Figure \ref{fig:pca_expl_var} shows the cumulative explained variance ratio showing that only a few of the $18$ features are mostly irrelevant. Based on the loadings in Figure \ref{fig:pca_loadings} we can determine that those include for example the average time to comment in hours and its standard deviation.
+
+\begin{figure}[H]
+	\centering
+	\begin{subfigure}[t]{0.48\textwidth}
+		\centering
+		\includegraphics[width=\textwidth]{report_images/pca_loadings.png}
+		\caption{2D PCA loadings displayed as vectors with the appropriate length and direction. The loadings are the coefficients of features for each (in this case 2) principal component.}
+		\label{fig:pca_loadings}
+	\end{subfigure}
+	\hfill
+	\begin{subfigure}[t]{0.48\textwidth}
+		\centering
+		\includegraphics[width=\textwidth]{report_images/pca_explained_variance_ratio.png}
+		\caption{Line plot showing the cumulative explained variance ratio of all principal components computed by the PCA method. The x-axis shows the number of components and the y-axis shows the explained variance ratio. The red line marks the 0.9 variance ratio threshold, which is crossed at 10 principal components.}
+		\label{fig:pca_expl_var}
+	\end{subfigure}
+	\caption{PCA feature loadings and cumulative explained variance ratio.}
+	\label{fig:pca_analysis}
+\end{figure}
+
+While PCA highlighted the directions of maximum variance, Factor Analysis with Varimax rotation (Figure \ref{fig:factor_analysis}) grouped the 18 observed features into 4 latent behavioral patterns. Factor 1 loads on volume and activity metrics (\textit{total\_comments, unique\_active\_hours}) representing the \textit{Activity} pattern. Factor 2 loads highly on negative engagement metrics (\textit{avg\_downvotes, stddev\_downvotes}) representing the \textit{Controversy} pattern. Factor 3 correlates with long time to comment and tabloid articles (\textit{avg\_time\_to\_comment\_hrs}, \textit{stddev\_time\_to\_comment\_hrs}, \textit{pct\_tabloid}) representing the \textit{Delay/Tabloid} pattern. Finally, Factor 4 loads highly on comment length and positive engagement metrics (\textit{avg\_comment\_length}, \textit{avg\_replies\_received}, \textit{avg\_upvotes}) representing the \textit{Popularity} pattern. This suggests that our observed features capture distinct behavioral patterns.
+
+To figure out the factor composition of each user cluster, we calculated average factor scores for each user cluster, visualized in Figure \ref{fig:factors_per_cluster}. This figure shows, that the latent behavioral patterns validate our cluster characterization. For example, Cluster 0 (average readers) have a negative score for Factor 1 (Activity) showing they are casual readers, Cluster 1 (spambots) have negative scores for Activity, Controversy and Popularity Factors validating their spambot label. Cluster 2 (essayists) have negative score for the Controversy Factor and positive score for the Popularity Factor validating the respected contributor characterization. Cluster 3 (entertainment fans) has a negative score in the Activity Factor and a positive score in the Delay/Tabloid Factor validating their casual entertainment fans, which do not keep up with breaking news characterization. Finally, Cluster 5 (keyboard warriors) are very active as seen in their characterization and Cluster 4 (trolls) are very controversial and engagement baiting, which directly confirms their trolls label.
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.85\textwidth]{report_images/factor_analysis.png}
+	\caption{Heatmap showing factor loadings. Factors are on the x-axis and observed features are on the y-axis. Darker colors mean higher correlation with positive values having positive correlation and negative values having negative correlation.}
+	\label{fig:factor_analysis}
+\end{figure}
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.75\textwidth]{report_images/factors_per_cluster.png}
+	\caption{Heatmap showing average factor scores for each user cluster. The factors are on the x-axis and the clusters are on the y-axis. Positive/red values mean higher correlation and negative/blue values mean negative correlation.}
+	\label{fig:factors_per_cluster}
+\end{figure}
+
+To analyze the clusters further, we looked into per cluster activity patterns. In Figure \ref{fig:heatmap_workdays} we can see average comment volume over the work days (Monday through Friday) per hour. Cluster 1 shows suspicious pattern of commenting mostly every other hour, which further supports the claim that the Cluster 1 consists of organized spambots. Other clusters seem to have normal activity patters with activity starting in the morning hours and with gradual decline in late evenings. Cluster 4 (trolls) seems to have a slightly shifted schedule compared to the other clusters, but it is not a significant difference. This shows that even though clusters have up to $19$ daily active hours over the course of the year, their activity patterns still resemble that of a casual user and not bots. Figure \ref{fig:heatmap_weekends} shows average per hour activity patterns over the weekends. Cluster 1 users seem to have the same pattern of posting every other hour. The other clusters have basically the same patterns with lower volume, which makes sense since its a weekend. We can verify this by looking at Figure \ref{fig:heatmap_weekly}, which shows distributions of daily comment volume over the course of the week per cluster. Most of the activity happens during the workdays with slight uptick on Tuesdays and the last work day, Friday. As seen in Figures \ref{fig:heatmap_workdays} and \ref{fig:heatmap_weekends}, weekends have a generaly lower volume. Cluster 1 users seems to have a strange pattern of commenting only on Tuesday, Wednesday and Saturday with a minority of their comments being on Monday. This is another piece of evidence pointing to a paid bot campaign behaviour of Cluster 1 users.
+
+\begin{figure}[H]
+	\centering
+	\begin{subfigure}[b]{0.48\textwidth}
+		\centering
+		\includegraphics[width=\textwidth]{report_images/workdays_heatmap.png}
+		\caption{Hourly activity distribution during workdays (Monday-Friday). Hour of day is on the x-axis and cluster number is on the y-axis.}
+		\label{fig:heatmap_workdays}
+	\end{subfigure}
+	\hfill
+	\begin{subfigure}[b]{0.48\textwidth}
+		\centering
+		\includegraphics[width=\textwidth]{report_images/weekends_heatmap.png}
+		\caption{Hourly activity distribution during weekends (Saturday-Sunday). Hour of day is on the x-axis and cluster number is on the y-axis.}
+		\label{fig:heatmap_weekends}
+	\end{subfigure}
+
+	\vspace{1em}
+
+	\begin{subfigure}[b]{1\textwidth}
+		\centering
+		\includegraphics[width=\textwidth]{report_images/weekly_heatmap.png}
+		\caption{Overall activity distribution across the days of the week (\%). Day of the week is on the x-axis and cluster number is on the y-axis.}
+		\label{fig:heatmap_weekly}
+	\end{subfigure}
+
+	\caption{Temporal behavior patterns analyzed per user cluster. The top row isolates intraday posting habits by hour, while the bottom row illustrates broader weekly engagement rhythms.}
+	\label{fig:temporal_behavior}
+\end{figure}
+
+To overlap the comment volume with real life events, we created the Figure \ref{fig:comment_volume}, which shows the 7 day rolling average of total comment count made by users in each cluster. Immediately, we can notice that all of Cluster 1's (spambots) comments come during a single week between late October to early November 2025, which (yes :D) provides even more evidence of a cooperated/paid bot campaign. Other than that, we can see that the volume plots overlap nicely with real-life events. Event 1 is Slovak PM Robert Fico flying to Moscow and Clusters 4 (trolls) and 5 (keyboard warriors), which engage in the hard news articles have uptick in activity. We can observe uptick in multiple clusters during Event 2: Clusters 2, 4 and 5, which comment mostly under hard news articles, due to the Velvet Revolution Anniversary on November 17 and a high-school student from Poprad paints an anti-fico slogan on the sidewalk with chalk. We also observer an uptick in Cluster 3, which comments under tabloid and sports articles, due to Slovak National Football Team playing in the 2026 FIFA World Cup Qualifiers. We can beautifully see a slight dip in comment volume during Christmas holidays with a large surge in Cluster 5 (keyboard warrios in hard news) after New Year's during Event 3, when USA captured Venezuelan President Maduro. Event 4 shows a slight uptick for Cluster 3 (sports and tabloids fans) in early February 2026 due to 2026 Winter Olympics in Milano-Cortina. Finally, we can see a large uptick in the hard news commenters from Clusters 2, 4 and 5 during Event 5, which marks the US-Israel attack on Iran starting the 2026 Iran War.
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=1\textwidth]{report_images/weekly_comment_volumes_numbered.png}
+	\caption{Line plot showing 7 day rolling average of total comment volume made by each cluster of users. The days are on the x-axis and the comment volume is on the y-axis. Numbered vertical lines describe the following real life events: 1. Slovak PM Robert Fico flies to Moscow to meet Putin. 2. November 17 (Velvet Revolution Anniversary) + Slovak National Football Team plays in the 2026 FIFA World Cup qualifiers + High School Student from Poprad paints a slogan about the Slovak PM Robert Fico on the sidewalk with chalk. 3. USA captures Venezuelan President Maduro. 4. 2026 Winter Olympic Games in Milano-Cortina. 5. The USA and Israel attack Iran.}
+	\label{fig:comment_volume}
+\end{figure}
+
+To see the exact days of the events we can look at the heatmap in Figure \ref{fig:daily_heatmap}. We can see a dark, almost black, square on the day of Maduro's capture (January 3, 2026) for Clusters 2, 4 and 5. Next, we can observe various darkened squares during early February (2026 Winter Olympics Games) for Cluster 3. Cluster 3 also shows the (arguably) least intense commenting, which is supported by its low daily comment volume per active day (2.26). Notice that the heatmap for Cluster 1 shows the same time anomalies observed in Figures \ref{fig:comment_volume} and \ref{fig:heatmap_weekly}. Finally, Cluster 2 reveals 2 facts about the data: it is the only cluster (except for cluster 1, spambots), which start its activity in late June 2025 instead of early May 2025 and it has a 6 weeks long gap between September 18, and October 4. Both patterns can also be observed in Figure \ref{fig:comment_volume} looking at the green line. The late start of the data can be explained by the fact that Cluster 2 likely consists of only \pravda{} users, since we only collected \pravda{} articles from June 26, 2025 onwards (see Section \ref{sec:article_parsing}). After looking at the article table in the database, the second anomaly can be explained by the lack of \pravda{} articles in that date range, likely due to a parsing error, which we missed until we got to this point in the analysis.
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=1\textwidth]{report_images/daily_comment_volume_per_week_heatmap.png}
+	\caption{Heatmap showing comment volume per cluster on each day between March 31, 2025 and May 18, 2026. The weeks are on the x-axis of each heatmap with labels in format YYYY-MM-DD denoting the first day of the week. The days of the week are on the y-axis.}
+	\label{fig:daily_heatmap}
+\end{figure}
+
+\subsection{Generative AI}
+After fine-tuning the model as described in Section \ref{sec:method_gen_ai}, we generated synthetic comments based on a test set of article titles at varying temperature thresholds ($T \in \{0.2, 0.4, 0.6, 0.8, 1.0\}$), as presented in Table \ref{tab:generated_comments}.
+
+A qualitative analysis of the generated responses reveals that while the model successfully mimics the polarized tone, it sometimes struggles with strict Slovak morphology. The model frequently hallucinates non-existent word forms and shows syntax degradation, occasionally mixing Czech and Slovak grammar.
+
+However, within the specific context of online news discussions — where toxic comments (such as those from Cluster 4) are characterized by poor grammar and excessive punctuation — these errors would paradoxically camouflage the model's responses. At lower temperature thresholds ($T \in [0.2, 0.6]$), the generated responses seem to have the most lifelikeness. The synthetic text mimics the linguistic degradation typical for internet trolls, which makes the model likely to pass the human eye test and basic heuristic bot-detection systems.
+
+\begin{table}[H]
+	\centering
+	\small
+	\begin{tabular}{@{} >{\bfseries}l >{\raggedright\arraybackslash}p{12.5cm} @{}}
+		\toprule
+		\multicolumn{2}{@{}p{15cm}@{}}{\textbf{Article 1:} SAMIT Trump a Putin: VIDEO Rusi dorazili na Aljašku! Privítali ich masové prostesty, Lavrov provokoval v mikine ZSSR}                                                                                                                                                                                                                              \\ \midrule
+		Real Comment & Lavrov v mikine CCCP.ruzzke mokre sny. Skoda, ze 49\% slovakov zela si to.Slava UA!                                                                                                                                                                                                                                                                                                    \\ \addlinespace
+		AI (T=0.2)   & Putin je nebezpečný nenávistný terorista, ktorý sa musí zlikvidovať.                                                                                                                                                                                                                                                                                                                   \\ \addlinespace
+		AI (T=0.4)   & Putin je nebezpečný nenávistný terorista, ktorý chce svetovú koalíciu rozplynite ako nazrátky.                                                                                                                                                                                                                                                                                         \\ \addlinespace
+		AI (T=0.6)   & Slováci majú pravdu, rusofilia sa prechlapi ako po prvom vzácove!                                                                                                                                                                                                                                                                                                                      \\ \addlinespace
+		AI (T=0.8)   & Akoze to tady niekto dokaze pochopit? Len jedno... Putler je terorista....                                                                                                                                                                                                                                                                                                             \\ \midrule\midrule
+
+		\multicolumn{2}{@{}p{15cm}@{}}{\textbf{Article 2:} Už druhý PRIESKUM ukazuje na jasnú situáciu u voličov: ZLOŽITÝ stav, koaličné strany strácajú dych!}                                                                                                                                                                                                                                               \\ \midrule
+		Real Comment & rok 2027:62rocny povstante, vypocujte si rozsudok v mene SR... \twemoji{rolling on the floor laughing}\twemoji{rolling on the floor laughing}\twemoji{rolling on the floor laughing}                                                                                                                                                                                                   \\ \addlinespace
+		AI (T=0.2)   & Ako sa tu pochvaluju ze Fico uz 13 rokov riadi stat - takze ked su opozicia a vlada v tom istom pohode co chce Slovensko? A to nie je len pre tvoju ruskotvarne mozgovu...                                                                                                                                                                                                             \\ \addlinespace
+		AI (T=0.4)   & Smeráci sú v pasci a nemôžu skontrolovať kam zariadením toto štátne orgány?                                                                                                                                                                                                                                                                                                            \\ \addlinespace
+		AI (T=0.6)   & a čo si žiadaš keby boli demokrati to by sa s tebou nedozvedel                                                                                                                                                                                                                                                                                                                         \\ \addlinespace
+		AI (T=0.8)   & Keby tam neboli tak 40 vtipcov ako maju teraz v parlamente Slovacia by malo trvať aj dnes o jednom voľbe                                                                                                                                                                                                                                                                               \\ \midrule\midrule
+
+		\multicolumn{2}{@{}p{15cm}@{}}{\textbf{Article 3:} Ukrajinská brigáda čelí OBROVSKÉMU škandálu: Fotky vychudnutých vojakov, mesiace hladovali, žili len z dažďovej vody!}                                                                                                                                                                                                                             \\ \midrule
+		Real Comment & A kedy dezolé pochopi ze za to môže Putlerova vojna?                                                                                                                                                                                                                                                                                                                                   \\ \addlinespace
+		AI (T=0.2)   & Akoze toto nie je akcia na prave suhlasu? Akoze nevedia vyplavat? Akoze sa tu nikdy neprekupovalo ropu?                                                                                                                                                                                                                                                                                \\ \addlinespace
+		AI (T=0.4)   & To nevymyslis...Ked sa tu taketo veci vymysliac, potom si este niekedy pojem "pravda" rozumet  \twemoji{rolling on the floor laughing} \twemoji{rolling on the floor laughing} \twemoji{rolling on the floor laughing} \twemoji{rolling on the floor laughing} \twemoji{rolling on the floor laughing} \twemoji{rolling on the floor laughing} \twemoji{rolling on the floor laughing} \\ \addlinespace
+		AI (T=0.6)   & Takže sú to neomarxisti? To je super, lebo táto vláda nás už dlho hladovala ako marxistickú režim.                                                                                                                                                                                                                                                                                     \\ \addlinespace
+		AI (T=0.8)   & A kto ti povedal ze Putin je fašista? Akoze si nevidel film Totenkopf                                                                                                                                                                                                                                                                                                                  \\ \bottomrule
+	\end{tabular}
+	\caption{Examples of generated ragebait comments based strictly on the article headline at varying temperature ($T$) thresholds, compared against a randomly sampled comment from the database.}
+	\label{tab:generated_comments}
+\end{table}
+
+\subsection{Semantic analysis}
+Table \ref{tab:semantic_comments_stats} shows comment count per cluster and macro category of the sampled comments for semantic analysis. Note that the total comment count is only 98,089 instead of 100,000 because comments from users without a cluster were removed, which are the users with $\leq 5$ comments in total and $215$ users labeled by DBSCAN as noise. After computing the sentence embeddings of the comments using SlovakBERT \cite{Pikuliak2022}, we used PCA to reduce the dimension count from $768$ to $342$, i.e. $> 50\%$ reduction. The cumulative explained variance ratio is shown in Figure \ref{fig:semantic_expl_var}.
+
+
+\begin{table}[H]
+	\centering
+	\scriptsize
+	\begin{tabular}{@{}lrrrrrr@{}}
+		\toprule
+		\textbf{User Persona} & \textbf{Cluster 0} & \textbf{Cluster 1} & \textbf{Cluster 2} & \textbf{Cluster 3} & \textbf{Cluster 4} & \textbf{Cluster 5} \\ \midrule
+		\textbf{Count}        & 1,306              & 1,208              & 5,582              & 1,669              & 5,558              & 82,766             \\ \bottomrule
+	\end{tabular}
+
+	\vspace{1em}
+
+	\begin{tabular}{@{}lrrrrr@{}}
+		\toprule
+		\textbf{Macro Category} & \textbf{hard\_news} & \textbf{tabloid} & \textbf{sports} & \textbf{hobbies\_soft} & \textbf{other} \\ \midrule
+		\textbf{Count}          & 89,611              & 3,698            & 2,862           & 1,781                  & 137            \\ \bottomrule
+	\end{tabular}
+
+	\caption{Distribution of the 98,089 comments sampled for semantic mapping, broken down by cluster and macro category.}
+	\label{tab:semantic_comments_stats}
+\end{table}
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.75\textwidth]{report_images/semantic_cumulative_variance_ratio.png}
+	\caption{Line plot showing cumulative explained variance ratio of PCA on sentence embeddings. The number of components is on the x-axis and the cumulative explained variance ratio is on the y-axis. The red line shows the 0.95 ratio.}
+	\label{fig:semantic_expl_var}
+\end{figure}
+
+To find the best setting for the \texttt{n\_neighbors} parameter for the UMAP projection, we generated plots for $n\_neighbors \in \{2, 5, 10, 20, 50, 100, 200\}$. Smaller values ($< 20$, Figure \ref{fig:umap_under_20}) showed small local clusters due to the small number of neighbors disregarding the global structure of relationships between clusters. On the other hand, large values ($> 50$, Figure \ref{fig:umap_over_50}) merged clusters with different semantics into fewer clusters. Considering this and the fact that the middle values ($20$ and $50$) showed most distinct clusters, we settled on \texttt{n\_neighbors=50}.
+
+\begin{figure}[H]
+	\centering
+	\begin{subfigure}[b]{0.32\textwidth}
+		\centering
+		\includegraphics[width=\textwidth]{report_images/umap_2.png}
+		\caption{2D UMAP projection of sentence embeddings with user cluster labels for \texttt{n\protect\_neighbors=2}.}
+		\label{fig:umap_2}
+	\end{subfigure}
+	\hfill
+	\begin{subfigure}[b]{0.32\textwidth}
+		\centering
+		\includegraphics[width=\textwidth]{report_images/umap_5.png}
+		\caption{2D UMAP projection of sentence embeddings with user cluster labels for \texttt{n\protect\_neighbors=5}.}
+		\label{fig:umap_5}
+	\end{subfigure}
+	\hfill
+	\begin{subfigure}[b]{0.32\textwidth}
+		\centering
+		\includegraphics[width=\textwidth]{report_images/umap_10.png}
+		\caption{2D UMAP projection of sentence embeddings with user cluster labels for \texttt{n\protect\_neighbors=10}.}
+		\label{fig:umap_10}
+	\end{subfigure}
+	\caption{2D UMAP projection of sentence embeddings with user cluster labels for various \texttt{n\protect\_neighbors} settings.}
+	\label{fig:umap_under_20}
+\end{figure}
+
+\begin{figure}[H]
+	\centering
+	\begin{subfigure}[b]{0.48\textwidth}
+		\centering
+		\includegraphics[width=\textwidth]{report_images/umap_100.png}
+		\caption{2D UMAP projection of sentence embeddings with user cluster labels for \texttt{n\protect\_neighbors=100}.}
+		\label{fig:umap_100}
+	\end{subfigure}
+	\hfill
+	\begin{subfigure}[b]{0.48\textwidth}
+		\centering
+		\includegraphics[width=\textwidth]{report_images/umap_200.png}
+		\caption{2D UMAP projection of sentence embeddings with user cluster labels for \texttt{n\protect\_neighbors=200}.}
+		\label{fig:umap_200}
+	\end{subfigure}
+	\caption{2D UMAP projection of sentence embeddings with user cluster labels for various \texttt{n\protect\_neighbors} settings.}
+	\label{fig:umap_over_50}
+\end{figure}
+
+Figure \ref{fig:semantic_umap_cat_sentiment} shows UMAP projection of comments labeled by their macro category on the left and sentiment on the right with \texttt{n\_neighbors} set to $50$. In the right plot, we can see that each semantic cluster is predominantly negative. Looking at the left plot, which shows the semantic space of comments labeled by their macro category, we can identify a single small cluster at the bottom of the plot which contains the sports comments, which is also supported by looking at the labels of the user cluster of the commenters in Figure \ref{fig:semantic_umap}. Hobbies and tabloid comments are spread out evenly across all the clusters, showing that they, along with the hard news comments, do not have a universal language.
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.8\textwidth]{report_images/semantic_umap_macro_category_sentiment.png}
+	\caption{2D projection of the comment embeddings created with UMAP. Left plot contains projections labeled by their macro categories and the right plot by their sentiment.}
+	\label{fig:semantic_umap_cat_sentiment}
+\end{figure}
+
+In Figure \ref{fig:semantic_umap} we can see the UMAP projection of the comment embeddings labeled by the user cluster. Most of the semantic clusters are dominated by the user Cluster 5, which makes sense since it makes up the majority of the sampled comments. From the user cluster characterizations we know, it consists of users with by far the most average total comments ($>1000$). We can also notice that majority of the formed clusters are quite diverse, showing that their vocabulary is universal across user clusters. By looking at the interactive version of the plot we found comments which were officially removed (semantic cluster 3), sports comments (4), double spacing (5), Czech (6), ASCII emojis (7), Unicode emojis (8), upper case text (9), dates (10) and URL links (11). Finally, looking at the comments from semantic Clusters 1 and 2 undeniably confirms our suspicion of User Cluster 1 being an organized campaign, as almost every comment in both clusters promotes and includes the \texttt{ta1.sk} website link, which is not accessible at the time of writing, but we found Facebook and Instagram webpages carrying this name. The content of those pages suggests that this really was either a paid human (or a bot network, considering the sheer volume of the comments) campaign to promote an up-and-coming news website. The creation and activity on the social media pages overlap with the activity patterns observed in Figure \ref{fig:heatmap_weekly}.
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.80\textwidth]{report_images/semantic_umap_numbered.png}
+	\caption{2D projection of the comment embeddings labeled by the cluster of the commenter created with UMAP. Clusters 1 and 2 contain ta1.sk in their comments in 2 different obfuscated forms. Cluster 3 has comments removed due to official reasons. Cluster 4 contains sports comments. Cluster 5 contains comments with double spacing. Cluster 6 has comments in Czech. Cluster 7 has comments with ASCII emojis. Cluster 8 has comments with unicode emojis. Cluster 9 has comments written in upper case. Cluster 10 has comments with dates and Cluster 11 has comments containing URL links.}
+	\label{fig:semantic_umap}
+\end{figure}
+
+Finally, we also used tSNE \cite{Maaten2008} to visualize the semantic space with user cluster labels for various perplexity parameter values, presented in Figure \ref{fig:semantic_tsne_perplexities}. As with the UMAP projections, distinct clusters are forming at higher perplexity values. The semantic clusters found by tSNE closely mimic those found in the UMAP projection (see Figure \ref{fig:semantic_umap}). For example, the user Cluster 5 (keyboard warriors) dominates all semantic clusters with the largest clusters being occupied by users from majority of the user clusters and user Cluster 1 (spambots) is also represented by a few distinct clusters. Finally, looking at the contents of the clusters seen in Figure \ref{fig:semantic_tsne_p50}, we can observe that the tSNE projection groups comments with similar constructs as the UMAP algorithm, such as ta1.sk with ASCII (1) and non-ASCII (2) characters, ASCII smiley faces (3), double-spacing (4), Czech words (5), short uppercase comments (6), Unicode emojis (7), specific Unicode emojis (7.1 and 7.2) and URL links (8). This shows that both methods are viable options to find meaningful distinct semantic groups of comments.
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=1\textwidth]{report_images/semantic_tsne_perplexity_grid.png}
+	\caption{2D tSNE projections of the comment embeddings labeled by the cluster of the commenter for various perplexity values.}
+	\label{fig:semantic_tsne_perplexities}
+\end{figure}
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=1\textwidth]{report_images/semantic_tsne_p50_numbered.png}
+	\caption{2D tSNE projection, found with the perplexity parameter set to 50, of the comment embeddings labeled by the user cluster. Large numbers indicate semantic clusters with distinct contents.}
+	\label{fig:semantic_tsne_p50}
+\end{figure}
+
+\section{Discussion}
+In this project we built a large dataset consisting of thousands of users, tens of thousands of articles and millions of comments from $2$ of the most popular Slovak News Media websites: \pravda{} and \topky{}. We analyzed if/how sentiment of articles and comments correlate and found that the tabloid and sports categories are the most polarizing, having the largest divide among commenter sentiments. This can be explained by the fact that no matter if the articles are about a celebrity or whether the sports result is positive or negative, there are always people praising the targets of the articles and some people always hating on the targets of the articles. We also found that comments on \pravda{} seem to be less polarizing than on \topky{}.
+
+Next, we showed that even base open-source models with a size of only 3B parameters can generate somewhat accurate and Slovak sounding article and comment section summaries. We also identified 6 major groups of users using clustering methods such as KMeans \cite{Hartigan1979} and PAM \cite{Rousseeuw1987} and used Factor Analysis \cite{Spearman1904} to find 4 latent behavioral patterns that validated our cluster characterizations. The most interesting group was a group of over 1000 users which turned out to be a paid bot campaign to promote a new news website, which is unavailable at the time of writing. We discovered this by looking at the activity patterns of users in each cluster and analyzing the comment volumes in individuals parts of day, week and year and we found that during a single week between late October and early November 2025, thousands of comments promoting the website were made. We confirmed this assumption by computing sentence embeddings of a sample of almost 100,000 comments, reducing the embedding's dimensions with PCA \cite{Pearson1901} by more than $50\%$ while maintaining more than $95\%$ of the explained variance to reduce time of computing the UMAP \cite{McInnes2020} and tSNE \cite{Maaten2008} projections of the embeddings into 2-dimensional space. Other clusters included sports and tabloid fans, keyboard warriors, which is a group of over 1000 users with average total comment count of 1000 comments, trolls, which are the most downvoted users or respected contributors writing long paragraphs, which are generally well received within the discussions, receiving the most upvotes.
+
+Lastly, we used LoRA \cite{Hu2021} to fine-tune the same 3B parameter model Qwen-2.5-3B-Instruct \cite{Yang2024} on the most ragebaiting comments with most downvotes from the users in the trolls cluster to generate similarly sounding comments.
+
+Despite some of the successes of the analysis it also has a number of limitations. First, we did not fine-tune the model for generating summaries for long enough to even come close to beating the SlovakSum \cite{Ondrejova2024} results on their dataset. Next, the fine-tuned model for generating comments is missing some sort of an evaluation of the ragebaiting of the comments, perhaps human graders could label the responses of the model to evaluate the model's capabilities. Another obvious limitation was including only title and perex when predicting the sentiment of the article. This could be solved by having money for compute time and working on the project sooner.
+
+Next, as seen in Figure \ref{fig:heatmap_weekly} and described in Section \ref{sec:results_user_profiling}, the dataset has a large 6 week gap in the \pravda{} articles, which artificially lowered comment volumes in some clusters, although from the rest of the plot in Figure \ref{fig:daily_heatmap}, we can at least approximate the comment volume in that period. The \pravda{} discussions only show the net score (upvotes minus downvotes) of comments, which influenced the choice of ragebaiting comments because of the unknown true number of downvotes. The dataset is also missing the \topky{} lifestyle/hobbies articles influencing the direct macro (general) category comparisons with \pravda{}. The dataset is missing those articles, because the \topky{} articles from these macro categories do not have discussions. Next problem was a misclasification of articles into macro categories caused by the fact that the macro categorizing script was only considering the categories labeled by the publisher and not the URLs of the articles. This could be fixed with manual relabeling of the articles.
+
+For further research the dataset could be expanded to more websites either from the same part of the political spectrum, such as \href{https://www.hlavnespravy.sk/}{Hlavné správy} or from the opposite part of the spectrum, such as \href{https://www.dennikn.sk/}{Denník N} or \href{https://www.sme.sk/}{SME} or more tabloid publications, such as \href{https://www1.pluska.sk/}{Pluska}. Furthermore, including comments from social media pages could be used to show, if social media moderation is more or less strict compared to Slovak Media websites moderation. Next, the features for clustering could also include the average comment sentiment of the user and clustering options with larger number of clusters could be explored for more granular analysis. One could also train a model on the upvoted essayists users to generate long comments favored by the communities. Another interesting avenue would be using Aspect-Based Sentiment Analysis (ABSA) \cite{Hua2024} to identify what the user is writing positively or negatively about instead of just measuring the general sentiment of the comment. Finally, other hyperparameters of the UMAP semantic projection could be explored. Furthermore, instead of sampling random comments to make the semantic analysis, a temporal semantic analysis could be made showing if/how the semantic clusters from Figure \ref{fig:semantic_umap} change over time.
+
+As a closing word, I want to say that this was a very interesting, eye-opening and insanely fun project which taught me a humongous amount of new methods, techniques, visualizations and many other things. On the other hand, I did the whole project including data collection, modelling and analysis and writing this report in 11 full days over the course of 2 weeks, so I need to get some rest after I finish the rest of the exams.
+
+\section*{Declaration of Generative AI Usage}
+Generative AI models Gemini 3.1 Pro and Gemini 3.5 Flash in both AI Studio and the Gemini app were used for proofreading, spell-checking and helping with visualizations generation.
+
+\section*{Appendix}
+The source code in the form of a Jupyter Notebook along with scripts used for scraping and data pre/post-processing and the interactive plots can be found at \href{https://github.com/jakubdrobny/slovak-media-discourse}{https://github.com/jakubdrobny/slovak-media-discourse}.
+
+\bibliographystyle{plain}
+\bibliography{citations}
+
+\end{document}

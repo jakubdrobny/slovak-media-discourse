@@ -1,0 +1,103 @@
+
+=== PER-DOMAIN COMMENT STATISTICS ===
+
+Domain: pravda.sk
+Total comments: 595090
+Density (comments per article): 20.16
+Mean character length: 115.13
+Reply ratio: 58.81%
+Mean upvotes per comment: 2.25
+Mean downvotes per comment: 0.00
+--------------------------------------------------
+Domain: topky.sk
+Total comments: 2154493
+Density (comments per article): 39.17
+Mean character length: 102.95
+Reply ratio: 56.06%
+Mean upvotes per comment: 1.38
+Mean downvotes per comment: 0.53
+--------------------------------------------------
+
+=== PER (DOMAIN, MACRO_CATEGORY) COMMENT STATISTICS ===
+
+Domain: pravda.sk
+Macro category: hard_news
+Total comments: 511220
+Density (comments per article): 36.90
+Mean character length: 113.38
+Reply ratio: 59.60%
+Mean upvotes per comment: 2.33
+Mean downvotes per comment: 0.00
+--------------------------------------------------
+Domain: pravda.sk
+Macro category: hobbies_soft
+Total comments: 48008
+Density (comments per article): 6.48
+Mean character length: 127.71
+Reply ratio: 55.96%
+Mean upvotes per comment: 1.81
+Mean downvotes per comment: 0.00
+--------------------------------------------------
+Domain: pravda.sk
+Macro category: other
+Total comments: 3218
+Density (comments per article): 3.23
+Mean character length: 143.98
+Reply ratio: 53.60%
+Mean upvotes per comment: 1.53
+Mean downvotes per comment: 0.00
+--------------------------------------------------
+Domain: pravda.sk
+Macro category: sports
+Total comments: 29101
+Density (comments per article): 5.21
+Mean character length: 124.81
+Reply ratio: 52.66%
+Mean upvotes per comment: 1.83
+Mean downvotes per comment: 0.00
+--------------------------------------------------
+Domain: pravda.sk
+Macro category: tabloid
+Total comments: 3543
+Density (comments per article): 2.12
+Mean character length: 91.59
+Reply ratio: 38.61%
+Mean upvotes per comment: 1.96
+Mean downvotes per comment: 0.00
+--------------------------------------------------
+Domain: topky.sk
+Macro category: hard_news
+Total comments: 2000910
+Density (comments per article): 66.82
+Mean character length: 103.57
+Reply ratio: 57.09%
+Mean upvotes per comment: 1.37
+Mean downvotes per comment: 0.54
+--------------------------------------------------
+Domain: topky.sk
+Macro category: other
+Total comments: 380
+Density (comments per article): 0.88
+Mean character length: 92.35
+Reply ratio: 47.37%
+Mean upvotes per comment: 0.87
+Mean downvotes per comment: 0.66
+--------------------------------------------------
+Domain: topky.sk
+Macro category: sports
+Total comments: 49931
+Density (comments per article): 2.60
+Mean character length: 106.49
+Reply ratio: 50.87%
+Mean upvotes per comment: 0.77
+Mean downvotes per comment: 0.37
+--------------------------------------------------
+Domain: topky.sk
+Macro category: tabloid
+Total comments: 103272
+Density (comments per article): 18.96
+Mean character length: 89.32
+Reply ratio: 38.61%
+Mean upvotes per comment: 1.90
+Mean downvotes per comment: 0.37
+--------------------------------------------------
