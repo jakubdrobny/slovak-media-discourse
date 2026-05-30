@@ -9,3 +9,4 @@ Welcome to my analysis of [Pravda.sk](https://pravda.sk) and [Topky.sk](https://
 - `parsing/`: scripts used to the main parts of the scraping
 - `helpers/`: parsing testers
 - `scripts/`: pre/post-processing scripts for the data
+- `migrations/`: SQLite database up migrations
